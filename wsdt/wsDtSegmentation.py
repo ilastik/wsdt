@@ -1,7 +1,8 @@
-from vigra import analysis
+import numpy
+from vigra import analysis, filters
 
 # This code was adapted from the version in Timo's fork of vigra.
-def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, sigmaWeights, cleanCloseSeeds=True):
+def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, sigmaWeights, cleanCloseSeeds=True, returnSeedsOnly=False):
     """A probability map 'pmap' is provided and thresholded using pmin.
     This results in a mask. Every connected component which has fewer pixel
     than 'minMembraneSize' is deleted from the mask. The mask is used to
@@ -9,7 +10,7 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
 
     From this distance transformation the segmentation is computed using
     a seeded watershed algorithm. The seeds are placed on the local maxima
-    of the distanceTrafo after smoothing with 'sigmaMinima'.
+    of the distanceTransform after smoothing with 'sigmaMinima'.
 
     The weights of the watershed are defined by the inverse of the signed
     distance transform smoothed with 'sigmaWeights'.
@@ -22,90 +23,51 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     same neuron will be merged with a heuristik that ensures that no seeds of
     two different neurons are merged.
     """
-
-    def cdist(xy1, xy2):
-        # influenced by: http://stackoverflow.com/a/1871630
-        d = numpy.zeros((xy1.shape[1], xy1.shape[0], xy1.shape[0]))
-        for i in numpy.arange(xy1.shape[1]):
-            d[i,:,:] = numpy.square(numpy.subtract.outer(xy1[:,i], xy2[:,i]))
-        d = numpy.sum(d, axis=0)
-        return numpy.sqrt(d)
-
-    def findBestSeedCloserThanMembrane(seeds, distances, distanceTrafo, membraneDistance):
-        """ finds the best seed of the given seeds, that is the seed with the highest value distance transformation."""
-        closeSeeds = distances <= membraneDistance
-        numpy.zeros_like(closeSeeds)
-        # iterate over all close seeds
-        maximumDistance = -numpy.inf
-        mostCentralSeed = None
-        for seed in seeds[closeSeeds]:
-            if distanceTrafo[seed[0], seed[1], seed[2]] > maximumDistance:
-                maximumDistance = distanceTrafo[seed[0], seed[1], seed[2]]
-                mostCentralSeed = seed
-        return mostCentralSeed
-
-
-    def nonMaximumSuppressionSeeds(seeds, distanceTrafo):
-        """ removes all seeds that have a neigbour that is closer than the the next membrane
-
-        seeds is a list of all seeds, distanceTrafo is array-like
-        return is a list of all seeds that are relevant.
-
-        works only for 3d
-        """
-        seedsCleaned = set()
-
-        # calculate the distances from each seed to the next seeds.
-        distances = cdist(seeds, seeds)
-        for i in numpy.arange(len(seeds)):
-            membraneDistance = distanceTrafo[seeds[i,0], seeds[i,1], seeds[i,2]]
-            bestAlternative = findBestSeedCloserThanMembrane(seeds, distances[i,:], distanceTrafo, membraneDistance)
-            seedsCleaned.add(tuple(bestAlternative))
-        return numpy.array(list(seedsCleaned))
-
-
-    def volumeToListOfPoints(seedsVolume, threshold=0.):
-        return numpy.array(numpy.where(seedsVolume > threshold)).transpose()
-
-
     # get the thresholded pmap
-    binary = numpy.zeros_like(pmap, dtype=numpy.uint32)
-    binary[pmap >= pmin] = 1
+    binary_membranes = numpy.zeros_like(pmap, dtype=numpy.uint8)
+    binary_membranes[pmap >= pmin] = 1
 
     # delete small CCs
-    labeled = analysis.labelVolumeWithBackground(binary)
-    remove_wrongly_sized_connected_components(labeled, minMembraneSize)
+    labeled = analysis.labelVolumeWithBackground(binary_membranes)
+    remove_wrongly_sized_connected_components(labeled, minMembraneSize, in_place=True)
 
     # use cleaned binary image as mask
-    mask = numpy.zeros_like(binary, dtype = numpy.float32)
-    mask[labeled > 0] = 1.
+    big_membranes_only = numpy.zeros_like(binary_membranes, dtype = numpy.float32)
+    big_membranes_only[labeled > 0] = 1.
 
     # perform signed dt on mask
-    dt = filters.distanceTransform3D(mask)
-    dtInv = filters.distanceTransform3D(mask, background=False)
-    dtInv[dtInv>0] -= 1
-    dtSigned = dt.max() - dt + dtInv
+    distance_to_membrane = filters.distanceTransform3D(big_membranes_only)
+    distance_to_nonmembrane = filters.distanceTransform3D(big_membranes_only, background=False)
+    dtSigned = distance_to_membrane - distance_to_nonmembrane
+    dtSigned[:] *= -1
+    dtSigned[:] -= dtSigned.min()
 
-    dtSignedSmoothMinima = filters.gaussianSmoothing(dtSigned, sigmaMinima)
-    dtSignedSmoothWeights = filters.gaussianSmoothing(dtSigned, sigmaWeights)
+    dtSignedSmoothMinima = dtSigned
+    if sigmaMinima != 0.0:
+        dtSignedSmoothMinima = filters.gaussianSmoothing(dtSigned, sigmaMinima)
 
-    seedsVolume = analysis.localMinima3D(dtSignedSmoothMinima, neighborhood=26, allowAtBorder=True)
+    seedsVolume = analysis.extendedLocalMinima3D(dtSignedSmoothMinima, neighborhood=26)
 
     if cleanCloseSeeds:
-        seeds = nonMaximumSuppressionSeeds(volumeToListOfPoints(seedsVolume), dt)
-        seedsVolume = numpy.zeros_like(pmap, dtype=numpy.uint32)
-        seedsVolume[seeds.T.tolist()] = 1
+        _cleanCloseSeeds(seedsVolume, distance_to_membrane)
+
+    dtSignedSmoothWeights = dtSigned
+    if sigmaWeights != 0.0:
+        dtSignedSmoothWeights = filters.gaussianSmoothing(dtSigned, sigmaWeights)
 
     seedsLabeled = analysis.labelVolumeWithBackground(seedsVolume)
-    segmentation = analysis.watershedsNew(dtSignedSmoothWeights, seeds = seedsLabeled, neighborhood=26)[0]
+    if returnSeedsOnly:
+        return seedsLabeled
+    
+    segmentation = analysis.watershedsNew(dtSignedSmoothWeights, seeds=seedsLabeled, neighborhood=26)[0]
 
-    remove_wrongly_sized_connected_components(segmentation, minSegmentSize, in_place=True)
-
-    segmentation = analysis.watershedsNew(dtSignedSmoothWeights, seeds = segmentation, neighborhood=26)[0]
+    if minSegmentSize:
+        remove_wrongly_sized_connected_components(segmentation, minSegmentSize, in_place=True)
+        segmentation = analysis.watershedsNew(dtSignedSmoothWeights, seeds=segmentation, neighborhood=26)[0]
 
     return segmentation
 
-def remove_wrongly_sized_connected_components(a, min_size, max_size, in_place, bin_out=False):
+def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_place=False, bin_out=False):
     """
     Copied from lazyflow.operators.opFilterLabels.py
     Originally adapted from http://github.com/jni/ray/blob/develop/ray/morpho.py
@@ -137,3 +99,52 @@ def remove_wrongly_sized_connected_components(a, min_size, max_size, in_place, b
         numpy.place(a,a,1)
     return numpy.array(a, dtype=original_dtype)
 
+def _cleanCloseSeeds(seedsVolume, distance_to_membrane):
+    seeds = nonMaximumSuppressionSeeds(volumeToListOfPoints(seedsVolume), distance_to_membrane)
+    seedsVolume = numpy.zeros_like(seedsVolume, dtype=numpy.uint32)
+    seedsVolume[seeds.T.tolist()] = 1
+    return seedsVolume
+    
+def cdist(xy1, xy2):
+    # influenced by: http://stackoverflow.com/a/1871630
+    d = numpy.zeros((xy1.shape[1], xy1.shape[0], xy1.shape[0]))
+    for i in numpy.arange(xy1.shape[1]):
+        d[i,:,:] = numpy.square(numpy.subtract.outer(xy1[:,i], xy2[:,i]))
+    d = numpy.sum(d, axis=0)
+    return numpy.sqrt(d)
+
+def findBestSeedCloserThanMembrane(seeds, distances, distanceTrafo, membraneDistance):
+    """ finds the best seed of the given seeds, that is the seed with the highest value distance transformation."""
+    closeSeeds = distances <= membraneDistance
+    numpy.zeros_like(closeSeeds)
+    # iterate over all close seeds
+    maximumDistance = -numpy.inf
+    mostCentralSeed = None
+    for seed in seeds[closeSeeds]:
+        if distanceTrafo[seed[0], seed[1], seed[2]] > maximumDistance:
+            maximumDistance = distanceTrafo[seed[0], seed[1], seed[2]]
+            mostCentralSeed = seed
+    return mostCentralSeed
+
+
+def nonMaximumSuppressionSeeds(seeds, distanceTrafo):
+    """ removes all seeds that have a neigbour that is closer than the the next membrane
+
+    seeds is a list of all seeds, distanceTrafo is array-like
+    return is a list of all seeds that are relevant.
+
+    works only for 3d
+    """
+    seedsCleaned = set()
+
+    # calculate the distances from each seed to the next seeds.
+    distances = cdist(seeds, seeds)
+    for i in numpy.arange(len(seeds)):
+        membraneDistance = distanceTrafo[seeds[i,0], seeds[i,1], seeds[i,2]]
+        bestAlternative = findBestSeedCloserThanMembrane(seeds, distances[i,:], distanceTrafo, membraneDistance)
+        seedsCleaned.add(tuple(bestAlternative))
+    return numpy.array(list(seedsCleaned))
+
+
+def volumeToListOfPoints(seedsVolume, threshold=0.):
+    return numpy.array(numpy.where(seedsVolume > threshold)).transpose()
