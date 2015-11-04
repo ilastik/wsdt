@@ -38,6 +38,7 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     # perform signed dt on mask
     distance_to_membrane = filters.distanceTransform3D(big_membranes_only)
     distance_to_nonmembrane = filters.distanceTransform3D(big_membranes_only, background=False)
+    distance_to_nonmembrane[distance_to_nonmembrane>0] -= 1
     dtSigned = distance_to_membrane - distance_to_nonmembrane
     dtSigned[:] *= -1
     dtSigned[:] -= dtSigned.min()
@@ -46,7 +47,7 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     if sigmaMinima != 0.0:
         dtSignedSmoothMinima = filters.gaussianSmoothing(dtSigned, sigmaMinima)
 
-    seedsVolume = analysis.extendedLocalMinima3D(dtSignedSmoothMinima, neighborhood=26)
+    seedsVolume = analysis.localMinima3D(dtSignedSmoothMinima, neighborhood=26, allowPlateaus=True, allowAtBorder=True)
 
     if cleanCloseSeeds:
         _cleanCloseSeeds(seedsVolume, distance_to_membrane)
@@ -58,7 +59,7 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     seedsLabeled = analysis.labelVolumeWithBackground(seedsVolume)
     if returnSeedsOnly:
         return seedsLabeled
-    
+
     segmentation = analysis.watershedsNew(dtSignedSmoothWeights, seeds=seedsLabeled, neighborhood=26)[0]
 
     if minSegmentSize:
@@ -74,14 +75,14 @@ def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_pla
     (MIT License)
     """
     original_dtype = a.dtype
-        
+
     if not in_place:
         a = a.copy()
     if min_size == 0 and (max_size is None or max_size > numpy.prod(a.shape)): # shortcut for efficiency
         if (bin_out):
             numpy.place(a,a,1)
         return a
-    
+
     try:
         component_sizes = numpy.bincount( a.ravel() )
     except TypeError:
@@ -91,7 +92,7 @@ def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_pla
     bad_sizes = component_sizes < min_size
     if max_size is not None:
         numpy.logical_or( bad_sizes, component_sizes > max_size, out=bad_sizes )
-    
+
     bad_locations = bad_sizes[a]
     a[bad_locations] = 0
     if (bin_out):
@@ -104,7 +105,7 @@ def _cleanCloseSeeds(seedsVolume, distance_to_membrane):
     seedsVolume = numpy.zeros_like(seedsVolume, dtype=numpy.uint32)
     seedsVolume[seeds.T.tolist()] = 1
     return seedsVolume
-    
+
 def cdist(xy1, xy2):
     # influenced by: http://stackoverflow.com/a/1871630
     d = numpy.zeros((xy1.shape[1], xy1.shape[0], xy1.shape[0]))
