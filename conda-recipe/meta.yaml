@@ -1,0 +1,33 @@
+package:
+  name: wsdt
+  version: "0.1"
+
+source:
+  git_url: ../
+  git_tag: HEAD
+
+build:
+  number: 2
+  string: py27_{{PKG_BUILDNUM}}_g{{GIT_FULL_HASH[:7]}}
+
+requirements:
+  build:
+    - python 2.7*
+    - setuptools
+
+  run:
+    - python 2.7*
+    - numpy
+    - vigra >=1.11
+
+test:
+  requires:
+    - nose
+
+  imports:
+    - wsdt
+  
+about:
+  home: https://github.com/stuarteberg/wsdt
+  license: None
+  summary: Implementation of a distance-transform-based watershed algorithm
