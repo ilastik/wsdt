@@ -23,6 +23,38 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     same neuron will be merged with a heuristik that ensures that no seeds of
     two different neurons are merged.
     """
+
+    # assert that pmap is 2d or 3d
+    assert len( pmap.shape ) == 2 or len( pmap.shape ) == 3
+
+    if len( pmap.shape ) == 3:
+        print "I am 3d"
+        (signed_dt, dist_to_mem) = getSignedDt(pmap, pmin, minMembraneSize)
+        seeds     = getDtSeeds(signed_dt, sigmaMinima, dist_to_mem, cleanCloseSeeds)
+
+    else:
+        print "I am 2d"
+        (signed_dt, dist_to_mem) = getSignedDt_2d(pmap, pmin, minMembraneSize)
+        seeds     = getDtSeeds_2d(signed_dt, sigmaMinima, dist_to_mem, cleanCloseSeeds)
+
+    if returnSeedsOnly:
+        return seeds
+
+    print "Weights"
+    weights   = getDtWeights(signed_dt, sigmaWeights)
+
+    if len( pmap.shape ) == 3:
+        segmentation = iterativeWs(weights, seeds, minSegmentSize)
+    else:
+        segmentation = iterativeWs_2d(weights, seeds, minSegmentSize)
+
+    #return segmentation
+    return (segmentation, seeds, weights)
+
+
+# get the signed distance transform of pmap
+def getSignedDt(pmap, pmin, minMembraneSize):
+
     # get the thresholded pmap
     binary_membranes = numpy.zeros_like(pmap, dtype=numpy.uint8)
     binary_membranes[pmap >= pmin] = 1
@@ -36,14 +68,46 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     big_membranes_only[labeled > 0] = 1.
 
     # perform signed dt on mask
-    distance_to_membrane = filters.distanceTransform3D(big_membranes_only)
-    distance_to_nonmembrane = filters.distanceTransform3D(big_membranes_only, background=False)
+    distance_to_membrane = numpy.array( filters.distanceTransform3D(big_membranes_only) )
+    distance_to_nonmembrane = numpy.array( filters.distanceTransform3D(big_membranes_only, background=False) )
     distance_to_nonmembrane[distance_to_nonmembrane>0] -= 1
     dtSigned = distance_to_membrane - distance_to_nonmembrane
     dtSigned[:] *= -1
     dtSigned[:] -= dtSigned.min()
 
-    dtSignedSmoothMinima = dtSigned
+    return (dtSigned, distance_to_membrane)
+
+
+# get the signed distance transform of pmap (2d)
+def getSignedDt_2d(pmap, pmin, minMembraneSize):
+
+    # get the thresholded pmap
+    binary_membranes = numpy.zeros_like(pmap, dtype=numpy.uint8)
+    binary_membranes[pmap >= pmin] = 1
+
+    # delete small CCs
+    labeled = analysis.labelImageWithBackground(binary_membranes)
+    remove_wrongly_sized_connected_components(labeled, minMembraneSize, in_place=True)
+
+    # use cleaned binary image as mask
+    big_membranes_only = numpy.zeros_like(binary_membranes, dtype = numpy.float32)
+    big_membranes_only[labeled > 0] = 1.
+
+    # perform signed dt on mask
+    distance_to_membrane    = numpy.array( filters.distanceTransform2D(big_membranes_only) )
+    distance_to_nonmembrane = numpy.array( filters.distanceTransform2D(big_membranes_only, background=False) )
+    distance_to_nonmembrane[distance_to_nonmembrane>0] -= 1
+    dtSigned = distance_to_membrane - distance_to_nonmembrane
+    dtSigned[:] *= -1
+    dtSigned[:] -= dtSigned.min()
+
+    return (dtSigned, distance_to_membrane)
+
+
+# get the seeds from the signed distance transform
+def getDtSeeds(dtSigned, sigmaMinima, distance_to_membrane, cleanCloseSeeds):
+
+    dtSignedSmoothMinima = dtSigned.copy()
     if sigmaMinima != 0.0:
         dtSignedSmoothMinima = filters.gaussianSmoothing(dtSigned, sigmaMinima)
 
@@ -52,21 +116,59 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     if cleanCloseSeeds:
         _cleanCloseSeeds(seedsVolume, distance_to_membrane)
 
-    dtSignedSmoothWeights = dtSigned
+    seedsLabeled = analysis.labelVolumeWithBackground(seedsVolume)
+    return seedsLabeled
+
+
+# get the seeds from the signed distance transform (2d)
+def getDtSeeds_2d(dtSigned, sigmaMinima, distance_to_membrane, cleanCloseSeeds):
+
+    dtSignedSmoothMinima = dtSigned.copy()
+    if sigmaMinima != 0.0:
+        dtSignedSmoothMinima = filters.gaussianSmoothing(dtSigned, sigmaMinima)
+
+    seedsArea = analysis.localMinima(dtSignedSmoothMinima, neighborhood=8, allowPlateaus=True, allowAtBorder=True)
+
+    if cleanCloseSeeds:
+        _cleanCloseSeeds(seedsArea, distance_to_membrane)
+
+    seedsLabeled = analysis.labelImageWithBackground(seedsArea)
+    return seedsLabeled
+
+
+# get the weights from the signed distance transform
+def getDtWeights(dtSigned, sigmaWeights):
+
+    dtSignedSmoothWeights = dtSigned.copy()
     if sigmaWeights != 0.0:
         dtSignedSmoothWeights = filters.gaussianSmoothing(dtSigned, sigmaWeights)
 
-    seedsLabeled = analysis.labelVolumeWithBackground(seedsVolume)
-    if returnSeedsOnly:
-        return seedsLabeled
+    return dtSignedSmoothWeights
 
-    segmentation = analysis.watershedsNew(dtSignedSmoothWeights, seeds=seedsLabeled, neighborhood=26)[0]
+
+# perform watershed on weights and seeds
+def iterativeWs(weights, seedsLabeled, minSegmentSize):
+
+    segmentation = analysis.watershedsNew(weights, seeds=seedsLabeled, neighborhood=26)[0]
 
     if minSegmentSize:
         remove_wrongly_sized_connected_components(segmentation, minSegmentSize, in_place=True)
-        segmentation = analysis.watershedsNew(dtSignedSmoothWeights, seeds=segmentation, neighborhood=26)[0]
+        segmentation = analysis.watershedsNew(weights, seeds=segmentation, neighborhood=26)[0]
 
     return segmentation
+
+
+# perform watershed on weights and seeds
+def iterativeWs_2d(weights, seedsLabeled, minSegmentSize):
+
+    segmentation = analysis.watershedsNew(weights, seeds=seedsLabeled, neighborhood=8)[0]
+
+    if minSegmentSize:
+        remove_wrongly_sized_connected_components(segmentation, minSegmentSize, in_place=True)
+        segmentation = analysis.watershedsNew(weights, seeds=segmentation, neighborhood=8)[0]
+
+    return segmentation
+
 
 def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_place=False, bin_out=False):
     """
@@ -122,8 +224,8 @@ def findBestSeedCloserThanMembrane(seeds, distances, distanceTrafo, membraneDist
     maximumDistance = -numpy.inf
     mostCentralSeed = None
     for seed in seeds[closeSeeds]:
-        if distanceTrafo[seed[0], seed[1], seed[2]] > maximumDistance:
-            maximumDistance = distanceTrafo[seed[0], seed[1], seed[2]]
+        if distanceTrafo[tuple(seed)] > maximumDistance:
+            maximumDistance = distanceTrafo[tuple(seed)]
             mostCentralSeed = seed
     return mostCentralSeed
 
@@ -141,7 +243,7 @@ def nonMaximumSuppressionSeeds(seeds, distanceTrafo):
     # calculate the distances from each seed to the next seeds.
     distances = cdist(seeds, seeds)
     for i in numpy.arange(len(seeds)):
-        membraneDistance = distanceTrafo[seeds[i,0], seeds[i,1], seeds[i,2]]
+        membraneDistance = distanceTrafo[tuple(seeds[i])]
         bestAlternative = findBestSeedCloserThanMembrane(seeds, distances[i,:], distanceTrafo, membraneDistance)
         seedsCleaned.add(tuple(bestAlternative))
     return numpy.array(list(seedsCleaned))
