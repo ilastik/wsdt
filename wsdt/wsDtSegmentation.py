@@ -1,6 +1,13 @@
 import numpy
 from vigra import analysis, filters
 
+# global stuff that needs to be treated different in 2d and 3d
+_neighbors          = None
+_labelWithBackground= None
+_localMinima        = None
+_distanceTransform  = None
+
+
 # This code was adapted from the version in Timo's fork of vigra.
 def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, sigmaWeights, cleanCloseSeeds=True, returnSeedsOnly=False):
     """A probability map 'pmap' is provided and thresholded using pmin.
@@ -24,32 +31,43 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     two different neurons are merged.
     """
 
-    # assert that pmap is 2d or 3d
-    assert len( pmap.shape ) == 2 or len( pmap.shape ) == 3
+    assert type(pmap) is numpy.ndarray, "Make sure that pmap is a plain numpy array, instead of: " + str(type(pmap))
 
+    # assert that pmap is 2d or 3d
+    assert len( pmap.shape ) == 2 or len( pmap.shape ) == 3, str( pmap.shape )
+
+    # set the different functions and constants for 2d / 3d globally
     if len( pmap.shape ) == 3:
-        print "I am 3d"
-        (signed_dt, dist_to_mem) = getSignedDt(pmap, pmin, minMembraneSize)
-        seeds     = getDtSeeds(signed_dt, sigmaMinima, dist_to_mem, cleanCloseSeeds)
+        global _neighbors
+        _neighbors            = 26
+        global _labelWithBackground
+        _labelWithBackground  = analysis.labelVolumeWithBackground
+        global _localMinima
+        _localMinima          = analysis.localMinima3D
+        global _distanceTransform
+        _distanceTransform    = filters.distanceTransform3D
 
     else:
-        print "I am 2d"
-        (signed_dt, dist_to_mem) = getSignedDt_2d(pmap, pmin, minMembraneSize)
-        seeds     = getDtSeeds_2d(signed_dt, sigmaMinima, dist_to_mem, cleanCloseSeeds)
+        global _neighbors
+        _neighbors            = 8
+        global _labelWithBackground
+        _labelWithBackground  = analysis.labelImageWithBackground
+        global _localMinima
+        _localMinima          = analysis.localMinima
+        global _distanceTransform
+        _distanceTransform    = filters.distanceTransform2D
+
+    (signed_dt, dist_to_mem) = getSignedDt(pmap, pmin, minMembraneSize)
+    seeds     = getDtSeeds(signed_dt, sigmaMinima, dist_to_mem, cleanCloseSeeds)
 
     if returnSeedsOnly:
         return seeds
 
-    print "Weights"
     weights   = getDtWeights(signed_dt, sigmaWeights)
+    segmentation = iterativeWs(weights, seeds, minSegmentSize)
 
-    if len( pmap.shape ) == 3:
-        segmentation = iterativeWs(weights, seeds, minSegmentSize)
-    else:
-        segmentation = iterativeWs_2d(weights, seeds, minSegmentSize)
-
-    #return segmentation
-    return (segmentation, seeds, weights)
+    return segmentation
+    #return (segmentation, seeds, weights)
 
 
 # get the signed distance transform of pmap
@@ -60,7 +78,7 @@ def getSignedDt(pmap, pmin, minMembraneSize):
     binary_membranes[pmap >= pmin] = 1
 
     # delete small CCs
-    labeled = analysis.labelVolumeWithBackground(binary_membranes)
+    labeled = _labelWithBackground(binary_membranes)
     remove_wrongly_sized_connected_components(labeled, minMembraneSize, in_place=True)
 
     # use cleaned binary image as mask
@@ -68,34 +86,8 @@ def getSignedDt(pmap, pmin, minMembraneSize):
     big_membranes_only[labeled > 0] = 1.
 
     # perform signed dt on mask
-    distance_to_membrane = numpy.array( filters.distanceTransform3D(big_membranes_only) )
-    distance_to_nonmembrane = numpy.array( filters.distanceTransform3D(big_membranes_only, background=False) )
-    distance_to_nonmembrane[distance_to_nonmembrane>0] -= 1
-    dtSigned = distance_to_membrane - distance_to_nonmembrane
-    dtSigned[:] *= -1
-    dtSigned[:] -= dtSigned.min()
-
-    return (dtSigned, distance_to_membrane)
-
-
-# get the signed distance transform of pmap (2d)
-def getSignedDt_2d(pmap, pmin, minMembraneSize):
-
-    # get the thresholded pmap
-    binary_membranes = numpy.zeros_like(pmap, dtype=numpy.uint8)
-    binary_membranes[pmap >= pmin] = 1
-
-    # delete small CCs
-    labeled = analysis.labelImageWithBackground(binary_membranes)
-    remove_wrongly_sized_connected_components(labeled, minMembraneSize, in_place=True)
-
-    # use cleaned binary image as mask
-    big_membranes_only = numpy.zeros_like(binary_membranes, dtype = numpy.float32)
-    big_membranes_only[labeled > 0] = 1.
-
-    # perform signed dt on mask
-    distance_to_membrane    = numpy.array( filters.distanceTransform2D(big_membranes_only) )
-    distance_to_nonmembrane = numpy.array( filters.distanceTransform2D(big_membranes_only, background=False) )
+    distance_to_membrane    = _distanceTransform(big_membranes_only)
+    distance_to_nonmembrane = _distanceTransform(big_membranes_only, background=False)
     distance_to_nonmembrane[distance_to_nonmembrane>0] -= 1
     dtSigned = distance_to_membrane - distance_to_nonmembrane
     dtSigned[:] *= -1
@@ -107,39 +99,23 @@ def getSignedDt_2d(pmap, pmin, minMembraneSize):
 # get the seeds from the signed distance transform
 def getDtSeeds(dtSigned, sigmaMinima, distance_to_membrane, cleanCloseSeeds):
 
-    dtSignedSmoothMinima = dtSigned.copy()
+    dtSignedSmoothMinima = dtSigned
     if sigmaMinima != 0.0:
         dtSignedSmoothMinima = filters.gaussianSmoothing(dtSigned, sigmaMinima)
 
-    seedsVolume = analysis.localMinima3D(dtSignedSmoothMinima, neighborhood=26, allowPlateaus=True, allowAtBorder=True)
+    seedsVolume = _localMinima(dtSignedSmoothMinima, neighborhood=_neighbors, allowPlateaus=True, allowAtBorder=True)
 
     if cleanCloseSeeds:
         _cleanCloseSeeds(seedsVolume, distance_to_membrane)
 
-    seedsLabeled = analysis.labelVolumeWithBackground(seedsVolume)
-    return seedsLabeled
-
-
-# get the seeds from the signed distance transform (2d)
-def getDtSeeds_2d(dtSigned, sigmaMinima, distance_to_membrane, cleanCloseSeeds):
-
-    dtSignedSmoothMinima = dtSigned.copy()
-    if sigmaMinima != 0.0:
-        dtSignedSmoothMinima = filters.gaussianSmoothing(dtSigned, sigmaMinima)
-
-    seedsArea = analysis.localMinima(dtSignedSmoothMinima, neighborhood=8, allowPlateaus=True, allowAtBorder=True)
-
-    if cleanCloseSeeds:
-        _cleanCloseSeeds(seedsArea, distance_to_membrane)
-
-    seedsLabeled = analysis.labelImageWithBackground(seedsArea)
+    seedsLabeled = _labelWithBackground(seedsVolume)
     return seedsLabeled
 
 
 # get the weights from the signed distance transform
 def getDtWeights(dtSigned, sigmaWeights):
 
-    dtSignedSmoothWeights = dtSigned.copy()
+    dtSignedSmoothWeights = dtSigned
     if sigmaWeights != 0.0:
         dtSignedSmoothWeights = filters.gaussianSmoothing(dtSigned, sigmaWeights)
 
@@ -149,25 +125,14 @@ def getDtWeights(dtSigned, sigmaWeights):
 # perform watershed on weights and seeds
 def iterativeWs(weights, seedsLabeled, minSegmentSize):
 
-    segmentation = analysis.watershedsNew(weights, seeds=seedsLabeled, neighborhood=26)[0]
+    segmentation = analysis.watershedsNew(weights, seeds=seedsLabeled, neighborhood=_neighbors)[0]
 
     if minSegmentSize:
         remove_wrongly_sized_connected_components(segmentation, minSegmentSize, in_place=True)
-        segmentation = analysis.watershedsNew(weights, seeds=segmentation, neighborhood=26)[0]
+        segmentation = analysis.watershedsNew(weights, seeds=segmentation, neighborhood=_neighbors)[0]
 
     return segmentation
 
-
-# perform watershed on weights and seeds
-def iterativeWs_2d(weights, seedsLabeled, minSegmentSize):
-
-    segmentation = analysis.watershedsNew(weights, seeds=seedsLabeled, neighborhood=8)[0]
-
-    if minSegmentSize:
-        remove_wrongly_sized_connected_components(segmentation, minSegmentSize, in_place=True)
-        segmentation = analysis.watershedsNew(weights, seeds=segmentation, neighborhood=8)[0]
-
-    return segmentation
 
 
 def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_place=False, bin_out=False):
@@ -210,6 +175,7 @@ def _cleanCloseSeeds(seedsVolume, distance_to_membrane):
 
 def cdist(xy1, xy2):
     # influenced by: http://stackoverflow.com/a/1871630
+    # FIXME This might lead to a memory overflow for too many seeds!
     d = numpy.zeros((xy1.shape[1], xy1.shape[0], xy1.shape[0]))
     for i in numpy.arange(xy1.shape[1]):
         d[i,:,:] = numpy.square(numpy.subtract.outer(xy1[:,i], xy2[:,i]))
