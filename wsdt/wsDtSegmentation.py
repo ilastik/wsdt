@@ -1,12 +1,5 @@
 import numpy
-from vigra import analysis, filters
-
-# global stuff that needs to be treated different in 2d and 3d
-_neighbors          = None
-_labelWithBackground= None
-_localMinima        = None
-_distanceTransform  = None
-
+import vigra
 
 # This code was adapted from the version in Timo's fork of vigra.
 def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, sigmaWeights, cleanCloseSeeds=True, returnSeedsOnly=False):
@@ -36,27 +29,6 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     # assert that pmap is 2d or 3d
     assert len( pmap.shape ) == 2 or len( pmap.shape ) == 3, str( pmap.shape )
 
-    # set the different functions and constants for 2d / 3d globally
-    if len( pmap.shape ) == 3:
-        global _neighbors
-        _neighbors            = 26
-        global _labelWithBackground
-        _labelWithBackground  = analysis.labelVolumeWithBackground
-        global _localMinima
-        _localMinima          = analysis.localMinima3D
-        global _distanceTransform
-        _distanceTransform    = filters.distanceTransform3D
-
-    else:
-        global _neighbors
-        _neighbors            = 8
-        global _labelWithBackground
-        _labelWithBackground  = analysis.labelImageWithBackground
-        global _localMinima
-        _localMinima          = analysis.localMinima
-        global _distanceTransform
-        _distanceTransform    = filters.distanceTransform2D
-
     (signed_dt, dist_to_mem) = getSignedDt(pmap, pmin, minMembraneSize)
     seeds     = getDtSeeds(signed_dt, sigmaMinima, dist_to_mem, cleanCloseSeeds)
 
@@ -69,6 +41,13 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     return segmentation
     #return (segmentation, seeds, weights)
 
+def localMinimaND(image, *args, **kwargs):
+    assert image.ndim in (2,3), \
+        "Unsupported dimensionality: {}".format( image.ndim )
+    if image.ndim == 2:
+        return vigra.analysis.localMinima(image, *args, **kwargs)
+    if image.ndim == 3:
+        return vigra.analysis.localMinima3D(image, *args, **kwargs)
 
 # get the signed distance transform of pmap
 def getSignedDt(pmap, pmin, minMembraneSize):
@@ -78,7 +57,7 @@ def getSignedDt(pmap, pmin, minMembraneSize):
     binary_membranes[pmap >= pmin] = 1
 
     # delete small CCs
-    labeled = _labelWithBackground(binary_membranes)
+    labeled = vigra.analysis.labelMultiArrayWithBackground(binary_membranes)
     remove_wrongly_sized_connected_components(labeled, minMembraneSize, in_place=True)
 
     # use cleaned binary image as mask
@@ -86,8 +65,8 @@ def getSignedDt(pmap, pmin, minMembraneSize):
     big_membranes_only[labeled > 0] = 1.
 
     # perform signed dt on mask
-    distance_to_membrane    = _distanceTransform(big_membranes_only)
-    distance_to_nonmembrane = _distanceTransform(big_membranes_only, background=False)
+    distance_to_membrane    = vigra.filters.distanceTransform(big_membranes_only)
+    distance_to_nonmembrane = vigra.filters.distanceTransform(big_membranes_only, background=False)
     distance_to_nonmembrane[distance_to_nonmembrane>0] -= 1
     dtSigned = distance_to_membrane - distance_to_nonmembrane
     dtSigned[:] *= -1
@@ -101,14 +80,14 @@ def getDtSeeds(dtSigned, sigmaMinima, distance_to_membrane, cleanCloseSeeds):
 
     dtSignedSmoothMinima = dtSigned
     if sigmaMinima != 0.0:
-        dtSignedSmoothMinima = filters.gaussianSmoothing(dtSigned, sigmaMinima)
+        dtSignedSmoothMinima = vigra.filters.gaussianSmoothing(dtSigned, sigmaMinima)
 
-    seedsVolume = _localMinima(dtSignedSmoothMinima, neighborhood=_neighbors, allowPlateaus=True, allowAtBorder=True)
+    seedsVolume = localMinimaND(dtSignedSmoothMinima, allowPlateaus=True, allowAtBorder=True)
 
     if cleanCloseSeeds:
         _cleanCloseSeeds(seedsVolume, distance_to_membrane)
 
-    seedsLabeled = _labelWithBackground(seedsVolume)
+    seedsLabeled = vigra.analysis.labelMultiArrayWithBackground(seedsVolume)
     return seedsLabeled
 
 
@@ -117,7 +96,7 @@ def getDtWeights(dtSigned, sigmaWeights):
 
     dtSignedSmoothWeights = dtSigned
     if sigmaWeights != 0.0:
-        dtSignedSmoothWeights = filters.gaussianSmoothing(dtSigned, sigmaWeights)
+        dtSignedSmoothWeights = vigra.filters.gaussianSmoothing(dtSigned, sigmaWeights)
 
     return dtSignedSmoothWeights
 
@@ -125,11 +104,11 @@ def getDtWeights(dtSigned, sigmaWeights):
 # perform watershed on weights and seeds
 def iterativeWs(weights, seedsLabeled, minSegmentSize):
 
-    segmentation = analysis.watershedsNew(weights, seeds=seedsLabeled, neighborhood=_neighbors)[0]
+    segmentation = vigra.analysis.watershedsNew(weights, seeds=seedsLabeled)[0]
 
     if minSegmentSize:
         remove_wrongly_sized_connected_components(segmentation, minSegmentSize, in_place=True)
-        segmentation = analysis.watershedsNew(weights, seeds=segmentation, neighborhood=_neighbors)[0]
+        segmentation = vigra.analysis.watershedsNew(weights, seeds=segmentation)[0]
 
     return segmentation
 
