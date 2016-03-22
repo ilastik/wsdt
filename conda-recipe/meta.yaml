@@ -23,6 +23,7 @@ requirements:
 test:
   requires:
     - nose
+    - numpy-allocation-tracking # This package can be found in the ilastik channel
 
   imports:
     - wsdt
