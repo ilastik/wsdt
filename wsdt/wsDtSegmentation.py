@@ -114,6 +114,21 @@ def iterativeWs(weights, seedsLabeled, minSegmentSize):
 
 
 
+def vigra_bincount(labels):
+    """
+    A RAM-efficient implementation of numpy.bincount() when you're dealing with uint32 labels.
+    If your data isn't int64, numpy.bincount() will copy it internally -- a huge RAM overhead.
+    (This implementation may also need to make a copy, but it prefers uint32, not int64.)
+    """
+    import vigra
+    import numpy as np
+    labels = labels.astype(np.uint32, copy=False)
+    labels = np.ravel(labels, order='K').reshape((-1, 1), order='A')
+    # We don't care what the 'image' parameter is, but we have to give something
+    image = labels.view(np.float32)
+    counts = vigra.analysis.extractRegionFeatures(image, labels, ['Count'])['Count']
+    return counts.astype(np.int64)
+
 def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_place=False, bin_out=False):
     """
     Copied from lazyflow.operators.opFilterLabels.py
@@ -130,7 +145,7 @@ def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_pla
         return a
 
     try:
-        component_sizes = numpy.bincount( a.ravel() )
+        component_sizes = vigra_bincount(a)
     except TypeError:
         # On 32-bit systems, must explicitly convert from uint32 to int
         # (This fix is just for VM testing.)
