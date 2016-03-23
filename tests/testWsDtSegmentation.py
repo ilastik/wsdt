@@ -6,24 +6,33 @@ from numpy_allocation_tracking.decorators import assert_mem_usage_factor
 
 class TestWsDtSegmentation(unittest.TestCase):
 
-    def test_simple_3D(self):
+    def _gen_input_data(self, ndim):
+        assert ndim in (2,3)
+
         # Create a volume with 8 sections
-        pmap = np.zeros( (101,101,101), dtype=np.float32 )
+        pmap = np.zeros( (101,)*ndim, dtype=np.float32 )
 
         # Three Z-planes
-        pmap[:2, :, :] = 1
-        pmap[49:51, :, :] = 1
-        pmap[-2:, :, :] = 1
+        pmap[  :2,  :] = 1
+        pmap[49:51, :] = 1
+        pmap[-2:,   :] = 1
 
         # Three Y-planes
-        pmap[:, :2, :] = 1
-        pmap[:, 49:51, :] = 1
-        pmap[:, -2:, :] = 1
+        pmap[:,   :2] = 1
+        pmap[:, 49:51] = 1
+        pmap[:, -2:] = 1
 
-        # Three X-planes
-        pmap[:, :, :2] = 1
-        pmap[:, :, 49:51] = 1
-        pmap[:, :, -2:] = 1
+        if ndim == 3:
+            # Three X-planes
+            pmap[:, :, :2] = 1
+            pmap[:, :, 49:51] = 1
+            pmap[:, :, -2:] = 1
+        
+        return pmap
+        
+
+    def test_simple_3D(self):
+        pmap = self._gen_input_data(3)
 
         # First, just check the seeds
         seeds = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, returnSeedsOnly=True)
@@ -44,16 +53,7 @@ class TestWsDtSegmentation(unittest.TestCase):
         assert ws_output.max() == 8
 
     def test_simple_2D(self):
-        # Create an with 4 regions
-        pmap = np.zeros( (101,101), dtype=np.float32 )
-
-        pmap[:2, :] = 1
-        pmap[49:51, :] = 1
-        pmap[-2:, :] = 1
-
-        pmap[:, :2] = 1
-        pmap[:, 49:51] = 1
-        pmap[:, -2:] = 1
+        pmap = self._gen_input_data(2)
 
         # First, just check the seeds
         seeds = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, returnSeedsOnly=True)
@@ -75,7 +75,9 @@ class TestWsDtSegmentation(unittest.TestCase):
 
 
     def test_border_seeds(self):
-        # check if seeds at the borders are generated
+        """
+        check if seeds at the borders are generated
+        """
 
         # create a volume with membrane evidence everywhere
         pmap = np.ones((50, 50, 50))
@@ -91,24 +93,7 @@ class TestWsDtSegmentation(unittest.TestCase):
         # Wrap the segmentation function in this decorator, to verify it's memory usage.
         memchecked_wsDtSegmentation = assert_mem_usage_factor(2.5)(wsDtSegmentation)
 
-        # Create a volume with 8 sections
-        pmap = np.zeros( (101,101,101), dtype=np.float32 )
-
-        # Three Z-planes
-        pmap[:2, :, :] = 1
-        pmap[49:51, :, :] = 1
-        pmap[-2:, :, :] = 1
-
-        # Three Y-planes
-        pmap[:, :2, :] = 1
-        pmap[:, 49:51, :] = 1
-        pmap[:, -2:, :] = 1
-
-        # Three X-planes
-        pmap[:, :, :2] = 1
-        pmap[:, :, 49:51] = 1
-        pmap[:, :, -2:] = 1
-
+        pmap = self._gen_input_data(3)
 
         # First, just check the seeds
         seeds = memchecked_wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, returnSeedsOnly=True)
