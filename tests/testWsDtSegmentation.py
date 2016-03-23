@@ -89,7 +89,7 @@ class TestWsDtSegmentation(unittest.TestCase):
 
     def test_memory_usage(self):
         # Wrap the segmentation function in this decorator, to verify it's memory usage.
-        memchecked_wsDtSegmentation = assert_mem_usage_factor(7.0)(wsDtSegmentation)
+        memchecked_wsDtSegmentation = assert_mem_usage_factor(2.5)(wsDtSegmentation)
 
         # Create a volume with 8 sections
         pmap = np.zeros( (101,101,101), dtype=np.float32 )

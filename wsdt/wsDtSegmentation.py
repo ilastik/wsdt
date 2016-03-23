@@ -24,22 +24,30 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     two different neurons are merged.
     """
 
-    assert type(pmap) is numpy.ndarray, "Make sure that pmap is a plain numpy array, instead of: " + str(type(pmap))
+    # FIXME: This shouldn't be...
+    assert type(pmap) is numpy.ndarray, \
+        "Make sure that pmap is a plain numpy array, instead of: " + str(type(pmap))
 
     # assert that pmap is 2d or 3d
-    assert len( pmap.shape ) == 2 or len( pmap.shape ) == 3, str( pmap.shape )
+    assert pmap.ndim in (2,3), "Input must be 2D or 3D.  shape={}".format( pmap.shape )
 
     (signed_dt, dist_to_mem) = getSignedDt(pmap, pmin, minMembraneSize)
-    seeds     = getDtSeeds(signed_dt, sigmaMinima, dist_to_mem, cleanCloseSeeds)
+    
+    if cleanCloseSeeds:
+        seeds = getDtSeeds(signed_dt, sigmaMinima, dist_to_mem, cleanCloseSeeds)
+    else:
+        # This saves a little RAM in the common case of cleanCloseSeeds=False
+        del dist_to_mem
+        seeds = getDtSeeds(signed_dt, sigmaMinima, None, cleanCloseSeeds)
 
     if returnSeedsOnly:
         return seeds
 
-    weights   = getDtWeights(signed_dt, sigmaWeights)
-    segmentation = iterativeWs(weights, seeds, minSegmentSize)
+    if sigmaWeights != 0.0:
+        vigra.filters.gaussianSmoothing(signed_dt, sigmaWeights, out=signed_dt)
+    segmentation = iterativeWsInplace(signed_dt, seeds, minSegmentSize)
 
     return segmentation
-    #return (segmentation, seeds, weights)
 
 def localMinimaND(image, *args, **kwargs):
     assert image.ndim in (2,3), \
@@ -51,38 +59,48 @@ def localMinimaND(image, *args, **kwargs):
 
 # get the signed distance transform of pmap
 def getSignedDt(pmap, pmin, minMembraneSize):
-
     # get the thresholded pmap
-    binary_membranes = numpy.zeros_like(pmap, dtype=numpy.uint8)
-    binary_membranes[pmap >= pmin] = 1
+    binary_membranes = (pmap >= pmin).view(numpy.uint8)
 
     # delete small CCs
     labeled = vigra.analysis.labelMultiArrayWithBackground(binary_membranes)
+    del binary_membranes
+    
     remove_wrongly_sized_connected_components(labeled, minMembraneSize, in_place=True)
 
-    # use cleaned binary image as mask
-    big_membranes_only = numpy.zeros_like(binary_membranes, dtype = numpy.float32)
-    big_membranes_only[labeled > 0] = 1.
-
     # perform signed dt on mask
-    distance_to_membrane    = vigra.filters.distanceTransform(big_membranes_only)
-    distance_to_nonmembrane = vigra.filters.distanceTransform(big_membranes_only, background=False)
+    distance_to_membrane = vigra.filters.distanceTransform(labeled)
+
+    # Save RAM with a sneaky trick:
+    # Use distanceTransform in-place, despite the fact that the input and output don't have the same types!
+    # (We can just cast labeled as a float32, since uint32 and float32 are the same size.)
+    distance_to_nonmembrane = labeled.view(numpy.float32)
+    vigra.filters.distanceTransform(labeled, background=False, out=distance_to_nonmembrane)
+    del labeled # Delete this name, not the array
+
+    # Combine distance transforms
     distance_to_nonmembrane[distance_to_nonmembrane>0] -= 1
-    dtSigned = distance_to_membrane - distance_to_nonmembrane
-    dtSigned[:] *= -1
-    dtSigned[:] -= dtSigned.min()
+
+    # Perform this calculation, but in-place to save RAM
+    # dtSigned = distance_to_membrane.max() - distance_to_membrane + distance_to_nonmembrane
+
+    dtSigned = distance_to_nonmembrane
+    dtSigned[:] -= distance_to_membrane
+    dtSigned[:] += distance_to_membrane.max()
 
     return (dtSigned, distance_to_membrane)
 
-
 # get the seeds from the signed distance transform
 def getDtSeeds(dtSigned, sigmaMinima, distance_to_membrane, cleanCloseSeeds):
+    # Can't work in-place: Not allowed to modify input
+    dtSigned = dtSigned.copy()
 
-    dtSignedSmoothMinima = dtSigned
     if sigmaMinima != 0.0:
-        dtSignedSmoothMinima = vigra.filters.gaussianSmoothing(dtSigned, sigmaMinima)
+        dtSigned = vigra.filters.gaussianSmoothing(dtSigned, sigmaMinima, out=dtSigned)
 
-    seedsVolume = localMinimaND(dtSignedSmoothMinima, allowPlateaus=True, allowAtBorder=True)
+    localMinimaND(dtSigned, allowPlateaus=True, allowAtBorder=True, marker=numpy.nan, out=dtSigned)
+    seedsVolume = numpy.isnan(dtSigned).view(numpy.uint8)
+    del dtSigned
 
     if cleanCloseSeeds:
         _cleanCloseSeeds(seedsVolume, distance_to_membrane)
@@ -90,27 +108,15 @@ def getDtSeeds(dtSigned, sigmaMinima, distance_to_membrane, cleanCloseSeeds):
     seedsLabeled = vigra.analysis.labelMultiArrayWithBackground(seedsVolume)
     return seedsLabeled
 
-
-# get the weights from the signed distance transform
-def getDtWeights(dtSigned, sigmaWeights):
-
-    dtSignedSmoothWeights = dtSigned
-    if sigmaWeights != 0.0:
-        dtSignedSmoothWeights = vigra.filters.gaussianSmoothing(dtSigned, sigmaWeights)
-
-    return dtSignedSmoothWeights
-
-
-# perform watershed on weights and seeds
-def iterativeWs(weights, seedsLabeled, minSegmentSize):
-
-    segmentation = vigra.analysis.watershedsNew(weights, seeds=seedsLabeled)[0]
+# perform watershed on weights and seeds INPLACE on the seeds
+def iterativeWsInplace(weights, seedsLabeled, minSegmentSize):
+    vigra.analysis.watershedsNew(weights, seeds=seedsLabeled, out=seedsLabeled)[0]
 
     if minSegmentSize:
-        remove_wrongly_sized_connected_components(segmentation, minSegmentSize, in_place=True)
-        segmentation = vigra.analysis.watershedsNew(weights, seeds=segmentation)[0]
+        remove_wrongly_sized_connected_components(seedsLabeled, minSegmentSize, in_place=True)
+        vigra.analysis.watershedsNew(weights, seeds=seedsLabeled, out=seedsLabeled)[0]
 
-    return segmentation
+    return seedsLabeled
 
 
 
@@ -130,11 +136,6 @@ def vigra_bincount(labels):
     return counts.astype(np.int64)
 
 def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_place=False, bin_out=False):
-    """
-    Copied from lazyflow.operators.opFilterLabels.py
-    Originally adapted from http://github.com/jni/ray/blob/develop/ray/morpho.py
-    (MIT License)
-    """
     original_dtype = a.dtype
 
     if not in_place:
@@ -144,22 +145,19 @@ def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_pla
             numpy.place(a,a,1)
         return a
 
-    try:
-        component_sizes = vigra_bincount(a)
-    except TypeError:
-        # On 32-bit systems, must explicitly convert from uint32 to int
-        # (This fix is just for VM testing.)
-        component_sizes = numpy.bincount( numpy.asarray(a.ravel(), dtype=int) )
+    component_sizes = vigra_bincount(a)
     bad_sizes = component_sizes < min_size
     if max_size is not None:
         numpy.logical_or( bad_sizes, component_sizes > max_size, out=bad_sizes )
+    del component_sizes
 
     bad_locations = bad_sizes[a]
     a[bad_locations] = 0
+    del bad_locations
     if (bin_out):
         # Replace non-zero values with 1
         numpy.place(a,a,1)
-    return numpy.array(a, dtype=original_dtype)
+    return numpy.asarray(a, dtype=original_dtype)
 
 def _cleanCloseSeeds(seedsVolume, distance_to_membrane):
     seeds = nonMaximumSuppressionSeeds(volumeToListOfPoints(seedsVolume), distance_to_membrane)
