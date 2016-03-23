@@ -2,7 +2,15 @@ import numpy
 import vigra
 
 # This code was adapted from the version in Timo's fork of vigra.
-def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, sigmaWeights, cleanCloseSeeds=True, returnSeedsOnly=False):
+def wsDtSegmentation(pmap,
+                     pmin,
+                     minMembraneSize,
+                     minSegmentSize,
+                     sigmaMinima,
+                     sigmaWeights,
+                     cleanCloseSeeds=True,
+                     returnSeedsOnly=False,
+                     out_debug_image_dict=None):
     """A probability map 'pmap' is provided and thresholded using pmin.
     This results in a mask. Every connected component which has fewer pixel
     than 'minMembraneSize' is deleted from the mask. The mask is used to
@@ -22,8 +30,11 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     If 'cleanCloseSeeds' is True, multiple seed points that are clearly in the
     same neuron will be merged with a heuristik that ensures that no seeds of
     two different neurons are merged.
+    
+    If 'out_debug_image_dict' is not None, it must be a dict, and this function
+    will save intermediate results to the dict as vigra.ChunkedArrayCompressed objects.
     """
-
+    assert out_debug_image_dict is None or isinstance(out_debug_image_dict, dict)
     # FIXME: This shouldn't be...
     assert type(pmap) is numpy.ndarray, \
         "Make sure that pmap is a plain numpy array, instead of: " + str(type(pmap))
@@ -31,23 +42,36 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     # assert that pmap is 2d or 3d
     assert pmap.ndim in (2,3), "Input must be 2D or 3D.  shape={}".format( pmap.shape )
 
-    (signed_dt, dist_to_mem) = getSignedDt(pmap, pmin, minMembraneSize)
+    (signed_dt, dist_to_mem) = getSignedDt(pmap, pmin, minMembraneSize, out_debug_image_dict)
     
     if cleanCloseSeeds:
-        seeds = getDtSeeds(signed_dt, sigmaMinima, dist_to_mem, cleanCloseSeeds)
+        seeds = getDtSeeds(signed_dt, sigmaMinima, dist_to_mem, cleanCloseSeeds, out_debug_image_dict)
     else:
         # This saves a little RAM in the common case of cleanCloseSeeds=False
         del dist_to_mem
-        seeds = getDtSeeds(signed_dt, sigmaMinima, None, cleanCloseSeeds)
+        seeds = getDtSeeds(signed_dt, sigmaMinima, None, cleanCloseSeeds, out_debug_image_dict)
 
     if returnSeedsOnly:
         return seeds
 
     if sigmaWeights != 0.0:
         vigra.filters.gaussianSmoothing(signed_dt, sigmaWeights, out=signed_dt)
-    segmentation = iterativeWsInplace(signed_dt, seeds, minSegmentSize)
+        save_debug_image('smoothed DT for watershed', signed_dt, out_debug_image_dict)
 
-    return segmentation
+    iterativeWsInplace(signed_dt, seeds, minSegmentSize, out_debug_image_dict)
+    return seeds
+
+def save_debug_image( name, image, out_debug_image_dict ):
+    if out_debug_image_dict is None:
+        return
+    
+    if hasattr(image, 'axistags'):
+        axistags=image.axistags
+    else:
+        axistags = None
+
+    out_debug_image_dict[name] = vigra.ChunkedArrayCompressed(image.shape, dtype=image.dtype, axistags=axistags)
+    out_debug_image_dict[name][:] = image
 
 def localMinimaND(image, *args, **kwargs):
     assert image.ndim in (2,3), \
@@ -58,15 +82,17 @@ def localMinimaND(image, *args, **kwargs):
         return vigra.analysis.localMinima3D(image, *args, **kwargs)
 
 # get the signed distance transform of pmap
-def getSignedDt(pmap, pmin, minMembraneSize):
+def getSignedDt(pmap, pmin, minMembraneSize, out_debug_image_dict):
     # get the thresholded pmap
     binary_membranes = (pmap >= pmin).view(numpy.uint8)
 
     # delete small CCs
     labeled = vigra.analysis.labelMultiArrayWithBackground(binary_membranes)
+    save_debug_image('thresholded membranes', labeled, out_debug_image_dict)
     del binary_membranes
-    
+
     remove_wrongly_sized_connected_components(labeled, minMembraneSize, in_place=True)
+    save_debug_image('filtered membranes', labeled, out_debug_image_dict)
 
     # perform signed dt on mask
     distance_to_membrane = vigra.filters.distanceTransform(labeled)
@@ -88,37 +114,39 @@ def getSignedDt(pmap, pmin, minMembraneSize):
     dtSigned[:] -= distance_to_membrane
     dtSigned[:] += distance_to_membrane.max()
 
+    save_debug_image('distance transform', distance_to_nonmembrane, out_debug_image_dict)
     return (dtSigned, distance_to_membrane)
 
 # get the seeds from the signed distance transform
-def getDtSeeds(dtSigned, sigmaMinima, distance_to_membrane, cleanCloseSeeds):
+def getDtSeeds(dtSigned, sigmaMinima, distance_to_membrane, cleanCloseSeeds, out_debug_image_dict):
     # Can't work in-place: Not allowed to modify input
     dtSigned = dtSigned.copy()
 
     if sigmaMinima != 0.0:
         dtSigned = vigra.filters.gaussianSmoothing(dtSigned, sigmaMinima, out=dtSigned)
+        save_debug_image('smoothed DT for seeds', dtSigned, out_debug_image_dict)
 
     localMinimaND(dtSigned, allowPlateaus=True, allowAtBorder=True, marker=numpy.nan, out=dtSigned)
     seedsVolume = numpy.isnan(dtSigned).view(numpy.uint8)
+    save_debug_image('seeds', dtSigned, out_debug_image_dict)
     del dtSigned
 
     if cleanCloseSeeds:
         _cleanCloseSeeds(seedsVolume, distance_to_membrane)
+        save_debug_image('cleaned seeds', seedsVolume, out_debug_image_dict)
 
     seedsLabeled = vigra.analysis.labelMultiArrayWithBackground(seedsVolume)
     return seedsLabeled
 
 # perform watershed on weights and seeds INPLACE on the seeds
-def iterativeWsInplace(weights, seedsLabeled, minSegmentSize):
+def iterativeWsInplace(weights, seedsLabeled, minSegmentSize, out_debug_image_dict):
     vigra.analysis.watershedsNew(weights, seeds=seedsLabeled, out=seedsLabeled)[0]
+    save_debug_image('watershed', seedsLabeled, out_debug_image_dict)
 
     if minSegmentSize:
         remove_wrongly_sized_connected_components(seedsLabeled, minSegmentSize, in_place=True)
         vigra.analysis.watershedsNew(weights, seeds=seedsLabeled, out=seedsLabeled)[0]
-
-    return seedsLabeled
-
-
+        save_debug_image('final watershed', seedsLabeled, out_debug_image_dict)
 
 def vigra_bincount(labels):
     """

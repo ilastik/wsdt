@@ -113,6 +113,22 @@ class TestWsDtSegmentation(unittest.TestCase):
         ws_output = memchecked_wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False)
         assert ws_output.max() == 8
 
+    def test_debug_output(self):
+        """
+        Just exercise the API for debug images, even though we're not
+        really checking the *contents* of the images in this test.
+        """
+        pmap = self._gen_input_data(3)
+        debug_images = {}
+        seeds = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, returnSeedsOnly=True, out_debug_image_dict=debug_images)
+        assert seeds.max() == 8
+        
+        assert 'thresholded membranes' in debug_images
+        assert debug_images['thresholded membranes'].shape == seeds.shape
+
+        assert 'filtered membranes' in debug_images
+        assert debug_images['filtered membranes'].shape == seeds.shape
+
 
 if __name__ == "__main__":
     import sys
