@@ -34,9 +34,11 @@ class TestWsDtSegmentation(unittest.TestCase):
     def test_simple_3D(self):
         pmap = self._gen_input_data(3)
 
-        # First, just check the seeds
-        seeds = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, returnSeedsOnly=True)
+        debug_results = {}
+        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, out_debug_image_dict=debug_results)
+        seeds = debug_results['seeds'][:]
         assert seeds.max() == 8
+        assert ws_output.max() == 8
 
         # Expect seeds at (25,25,25), (25,25,75), (25,75,25), etc...
         expected_seed_coords = list(np.ndindex((2,2,2)))
@@ -48,16 +50,14 @@ class TestWsDtSegmentation(unittest.TestCase):
         for seed_coord in expected_seed_coords:
             assert seeds[tuple(seed_coord)], "No seed at: {}".format( seed_coord )
 
-        # Now check the whole watershed volume
-        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False)
-        assert ws_output.max() == 8
-
     def test_simple_2D(self):
         pmap = self._gen_input_data(2)
 
-        # First, just check the seeds
-        seeds = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, returnSeedsOnly=True)
+        debug_results = {}
+        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, out_debug_image_dict=debug_results)
+        seeds = debug_results['seeds'][:]
         assert seeds.max() == 4
+        assert ws_output.max() == 4
 
         # Expect seeds at (25,25,25), (25,25,75), (25,75,25), etc...
         expected_seed_coords = list(np.ndindex((2,2)))
@@ -68,10 +68,6 @@ class TestWsDtSegmentation(unittest.TestCase):
 
         for seed_coord in expected_seed_coords:
             assert seeds[tuple(seed_coord)], "No seed at: {}".format( seed_coord )
-
-        # Now check the whole watershed volume
-        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False)
-        assert ws_output.max() == 4
 
 
     def test_border_seeds(self):
@@ -85,32 +81,18 @@ class TestWsDtSegmentation(unittest.TestCase):
         # create funnel without membrane evidence growing larger towards the block border.
         pmap[0, 12:39, 12:39] = 0
         pmap[1:50, 13:38, 13:38] = 0
-        seeds = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, returnSeedsOnly=True)
+
+        debug_results = {}
+        _ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, out_debug_image_dict=debug_results)
+        seeds = debug_results['seeds'][:]
         assert seeds.sum() == 1
         assert seeds[0, 25, 25] == 1
 
     def test_memory_usage(self):
-        # Wrap the segmentation function in this decorator, to verify it's memory usage.
-        memchecked_wsDtSegmentation = assert_mem_usage_factor(2.5)(wsDtSegmentation)
-
         pmap = self._gen_input_data(3)
 
-        # First, just check the seeds
-        seeds = memchecked_wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, returnSeedsOnly=True)
-        assert seeds.max() == 8
-
-        # Expect seeds at (25,25,25), (25,25,75), (25,75,25), etc...
-        expected_seed_coords = list(np.ndindex((2,2,2)))
-        expected_seed_coords = 50*np.array(expected_seed_coords) + 25
-
-        #print "EXPECTED:\n", expected_seed_coords
-        #print "SEEDS:\n", np.array(np.where(seeds)).transpose()
-
-        for seed_coord in expected_seed_coords:
-            assert seeds[tuple(seed_coord)], "No seed at: {}".format( seed_coord )
-
-        # Now check the whole watershed volume
-        ws_output = memchecked_wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False)
+        # Wrap the segmentation function in this decorator, to verify it's memory usage.
+        ws_output = assert_mem_usage_factor(2.5)(wsDtSegmentation)(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False)
         assert ws_output.max() == 8
 
     def test_debug_output(self):
@@ -120,14 +102,14 @@ class TestWsDtSegmentation(unittest.TestCase):
         """
         pmap = self._gen_input_data(3)
         debug_images = {}
-        seeds = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, returnSeedsOnly=True, out_debug_image_dict=debug_images)
-        assert seeds.max() == 8
+        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, out_debug_image_dict=debug_images)
+        assert ws_output.max() == 8
         
         assert 'thresholded membranes' in debug_images
-        assert debug_images['thresholded membranes'].shape == seeds.shape
+        assert debug_images['thresholded membranes'].shape == ws_output.shape
 
         assert 'filtered membranes' in debug_images
-        assert debug_images['filtered membranes'].shape == seeds.shape
+        assert debug_images['filtered membranes'].shape == ws_output.shape
 
 
 if __name__ == "__main__":
