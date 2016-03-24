@@ -181,7 +181,7 @@ def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_pla
     return numpy.asarray(a, dtype=original_dtype)
 
 def _cleanCloseSeeds(seedsVolume, distance_to_membrane):
-    seeds = nonMaximumSuppressionSeeds(volumeToListOfPoints(seedsVolume), distance_to_membrane)
+    seeds = nonMaximumSuppressionSeeds(nonzero_coord_array(seedsVolume), distance_to_membrane)
     seedsVolume = numpy.zeros_like(seedsVolume, dtype=numpy.uint32)
     seedsVolume[seeds.T.tolist()] = 1
     return seedsVolume
@@ -228,5 +228,20 @@ def nonMaximumSuppressionSeeds(seeds, distanceTrafo):
     return numpy.array(list(seedsCleaned))
 
 
-def volumeToListOfPoints(seedsVolume, threshold=0.):
-    return numpy.array(numpy.where(seedsVolume > threshold)).transpose()
+def nonzero_coord_array(a):
+    """
+    (Copied from lazyflow.utility.helpers)
+    
+    Equivalent to np.transpose(a.nonzero()), but much
+    faster for large arrays, thanks to a little trick:
+    The elements of the tuple returned by a.nonzero() share a common base,
+    so we can avoid the copy that would normally be incurred when
+    calling transpose() on the tuple.
+    """
+    base_array = a.nonzero()[0].base
+    
+    # This is necessary because VigraArrays have their own version
+    # of nonzero(), which adds an extra base in the view chain.
+    while base_array.base is not None:
+        base_array = base_array.base
+    return base_array
