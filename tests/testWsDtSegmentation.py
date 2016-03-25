@@ -95,6 +95,13 @@ class TestWsDtSegmentation(unittest.TestCase):
         ws_output = assert_mem_usage_factor(2.5)(wsDtSegmentation)(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False)
         assert ws_output.max() == 8
 
+        # Now try again, with cleanCloseSeeds=True
+        # Note: This is a best-case scenario for memory usage, since the memory 
+        #       usage of the seed-grouping function depends on the NUMBER of seeds,
+        #       and we have very few seeds in this test.
+        ws_output = assert_mem_usage_factor(3.5)(wsDtSegmentation)(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=True)
+        assert ws_output.max() == 8
+
     def test_debug_output(self):
         """
         Just exercise the API for debug images, even though we're not
@@ -115,25 +122,26 @@ class TestWsDtSegmentation(unittest.TestCase):
         """
         In this test we'll use input data that looks roughly like the following:
         
-        +------------------+------------------+
-        |        |         |        |         |
-        |                  |                  |
-        |                  |                  |
-        |                                     |
-        |   x         x         y        y    |
-        |                                     |
-        |                  |                  |
-        |                  |                  |
-        |        |         |        |         |
-        +------------------+------------------+
+        +------------------+------------------+------------------+
+        |        |         |        |         |                  |
+        |                  |                  |                  |
+        |                  |                  |                  |
+        |                                     |                  |
+        |   x         x         y        y    |        z         |
+        |                                     |                  |
+        |                  |                  |                  |
+        |                  |                  |                  |
+        |        |         |        |         |                  |
+        +------------------+------------------+------------------+
 
         The x and y markers indicate where seeds will end up.
         With cleanCloseSeeds=False, we would have 4 seed points and 4 final segments.
         But with cleanCloseSeeds=True, the two x points will end up in the same segment,
         and the two y points will end up in the same segment.
+        The lone z point will not be merged with anything
         """
         
-        input_data = np.zeros((100, 200), dtype=np.float32)
+        input_data = np.zeros((101, 301), dtype=np.float32)
         
         # Add borders
         input_data[0] = 1
@@ -141,27 +149,35 @@ class TestWsDtSegmentation(unittest.TestCase):
         input_data[:, 0] = 1
         input_data[:, -1] = 1
 
-        # Add notches on the borders
-        input_data[1:5,   50] = 1
-        input_data[1:40, 100] = 1
-        input_data[1:5,  150] = 1
+        # Add complete divider for the z compartment
+        input_data[:, 201] = 1
 
-        input_data[-5:-1,   50] = 1
-        input_data[-40:-1, 100] = 1
-        input_data[-5:-1,  150] = 1
-
+        # Add notches extending from the upper/lower borders
+        input_data[1:5,   51] = 1
+        input_data[1:40, 101] = 1
+        input_data[1:5,  151] = 1
+        input_data[-5:-1,   51] = 1
+        input_data[-40:-1, 101] = 1
+        input_data[-5:-1,  151] = 1
+        
         # First, try without cleanCloseSeeds
         debug_results = {}
         ws_output = wsDtSegmentation(input_data, 0.5, 0, 0, 0.0, 0.0, cleanCloseSeeds=False, out_debug_image_dict=debug_results)
-        assert ws_output.max() == 4
+        assert ws_output.max() == 5
 
         # Now, with cleanCloseSeeds=True, the left-hand seeds should 
         # be merged and the right-hand seeds should be merged
         debug_results = {}
         ws_output = wsDtSegmentation(input_data, 0.5, 0, 0, 0.0, 0.0, cleanCloseSeeds=True, out_debug_image_dict=debug_results)
-        assert ws_output.max() == 2
-        assert (ws_output[:, :100] == 1).all()
-        assert (ws_output[:, 101:] == 2).all()
+        assert ws_output.max() == 3
+        
+        # Every segment has a consistent value throughout
+        assert (ws_output[:, :101] == ws_output[0,0]).all()
+        assert (ws_output[:, 102:200] == ws_output[0, 102]).all()
+        assert (ws_output[:, 202:] == ws_output[0, 202]).all()
+        
+        # The segment values are different
+        assert ws_output[0,0] != ws_output[0, 102] != ws_output[0, 202]
 
 if __name__ == "__main__":
     import sys

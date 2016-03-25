@@ -1,5 +1,6 @@
 import numpy
 import vigra
+import networkx as nx
 
 # This code was adapted from the version in Timo's fork of vigra.
 def wsDtSegmentation(pmap,
@@ -45,16 +46,15 @@ def wsDtSegmentation(pmap,
 
     if cleanCloseSeeds:
         binary_seeds = getDtBinarySeeds(signed_dt, sigmaMinima, out_debug_image_dict)
-        binary_seeds = _cleanCloseSeeds(binary_seeds, dist_to_mem)
-        save_debug_image('cleaned binary seeds', binary_seeds, out_debug_image_dict)
+        seedsLabeled = group_seeds_by_distance( binary_seeds, dist_to_mem )
     else:
         del dist_to_mem
         binary_seeds = getDtBinarySeeds(signed_dt, sigmaMinima, out_debug_image_dict)
-
-    seedsLabeled = vigra.analysis.labelMultiArrayWithBackground(binary_seeds)
-    save_debug_image('seeds', seedsLabeled, out_debug_image_dict)
+        seedsLabeled = vigra.analysis.labelMultiArrayWithBackground(binary_seeds)
 
     del binary_seeds
+    save_debug_image('seeds', seedsLabeled, out_debug_image_dict)
+
     if sigmaWeights != 0.0:
         vigra.filters.gaussianSmoothing(signed_dt, sigmaWeights, out=signed_dt)
         save_debug_image('smoothed DT for watershed', signed_dt, out_debug_image_dict)
@@ -180,53 +180,66 @@ def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_pla
         numpy.place(a,a,1)
     return numpy.asarray(a, dtype=original_dtype)
 
-def _cleanCloseSeeds(seedsVolume, distance_to_membrane):
-    seeds = nonMaximumSuppressionSeeds(nonzero_coord_array(seedsVolume), distance_to_membrane)
-    seedsVolume = numpy.zeros_like(seedsVolume, dtype=numpy.uint32)
-    seedsVolume[seeds.T.tolist()] = 1
-    return seedsVolume
-
-def cdist(xy1, xy2):
-    # influenced by: http://stackoverflow.com/a/1871630
-    # FIXME This might lead to a memory overflow for too many seeds!
-    d = numpy.zeros((xy1.shape[1], xy1.shape[0], xy1.shape[0]))
-    for i in numpy.arange(xy1.shape[1]):
-        d[i,:,:] = numpy.square(numpy.subtract.outer(xy1[:,i], xy2[:,i]))
-    d = numpy.sum(d, axis=0)
-    return numpy.sqrt(d)
-
-def findBestSeedCloserThanMembrane(seeds, distances, distanceTrafo, membraneDistance):
-    """ finds the best seed of the given seeds, that is the seed with the highest value distance transformation."""
-    closeSeeds = distances <= membraneDistance
-    numpy.zeros_like(closeSeeds)
-    # iterate over all close seeds
-    maximumDistance = -numpy.inf
-    mostCentralSeed = None
-    for seed in seeds[closeSeeds]:
-        if distanceTrafo[tuple(seed)] > maximumDistance:
-            maximumDistance = distanceTrafo[tuple(seed)]
-            mostCentralSeed = seed
-    return mostCentralSeed
-
-
-def nonMaximumSuppressionSeeds(seeds, distanceTrafo):
-    """ removes all seeds that have a neigbour that is closer than the the next membrane
-
-    seeds is a list of all seeds, distanceTrafo is array-like
-    return is a list of all seeds that are relevant.
-
-    works only for 3d
+def group_seeds_by_distance(binary_seeds, distance_to_membrane):
     """
-    seedsCleaned = set()
+    Label seeds in groups, such that every seed in each group is closer to at
+    least one other seed in its group than it is to the nearest membrane.
 
-    # calculate the distances from each seed to the next seeds.
-    distances = cdist(seeds, seeds)
-    for i in numpy.arange(len(seeds)):
-        membraneDistance = distanceTrafo[tuple(seeds[i])]
-        bestAlternative = findBestSeedCloserThanMembrane(seeds, distances[i,:], distanceTrafo, membraneDistance)
-        seedsCleaned.add(tuple(bestAlternative))
-    return numpy.array(list(seedsCleaned))
+    Returns a label image.
+    """
+    seed_locations = nonzero_coord_array(binary_seeds)
+    assert seed_locations.shape[1] == binary_seeds.ndim
+    num_seeds = seed_locations.shape[0]
 
+    # Save some RAM by shrinking the dtype now
+    if seed_locations.max() < 1<<15:
+        seed_locations = seed_locations.astype(numpy.int16)
+    else:
+        seed_locations = seed_locations.astype(numpy.int32)
+
+    # Compute the distance of each seed to all other seeds
+    distances = pairwise_euclidean_distances(seed_locations)
+
+    # Extract the distance of each seed to the nearest membrane
+    point_distances_to_membrane = distance_to_membrane[tuple(seed_locations.transpose())]
+    
+    # Find the seed pairs that are closer to each other than they are to a membrane
+    valid_edges = numpy.ones( distances.shape, dtype=numpy.bool_ )
+    valid_edges = numpy.logical_and( valid_edges, ( distances < point_distances_to_membrane[:, None] ), out=valid_edges )
+    valid_edges = numpy.logical_and( valid_edges, ( distances < point_distances_to_membrane[None, :] ), out=valid_edges )
+
+    # Create a graph where each edge is a valid pair as determined above.
+    # (Note that self->self edges are included in this graph, since that distance is 0.0)
+    seed_graph = nx.Graph( iter(nonzero_coord_array(valid_edges)) )
+    seed_labels = numpy.zeros( (num_seeds,), dtype=numpy.uint32 )
+
+    # Find the connected components in the graph, and give each CC a unique ID, starting at 1.
+    for group_label, grouped_seed_indexes in enumerate(nx.connected_components(seed_graph), start=1):
+        for seed_index in grouped_seed_indexes:
+            seed_labels[seed_index] = group_label
+
+    # Apply the new labels to the original image
+    labeled_seed_img = numpy.zeros( binary_seeds.shape, dtype=numpy.uint32 )
+    labeled_seed_img[tuple(seed_locations.transpose())] = seed_labels
+    return labeled_seed_img
+    
+def pairwise_euclidean_distances( coord_array ):
+    """
+    For all coordinates in the given array of shape (N, DIM),
+    return a symmetric array of shape (N,N) of the distances
+    of each item to all others.
+    """
+    num_points = len(coord_array)
+    ndim = coord_array.shape[-1]
+    subtracted = numpy.ndarray( (num_points, num_points, ndim), dtype=numpy.float32 )
+    for i in range(coord_array.shape[-1]):
+        subtracted[...,i] = numpy.subtract.outer(coord_array[...,i], coord_array[...,i])
+    abs_subtracted = numpy.abs(subtracted, out=subtracted)
+
+    squared_distances = numpy.add.reduce(numpy.power(abs_subtracted, 2), axis=-1)
+    distances = numpy.sqrt(squared_distances, out=squared_distances)
+    assert distances.shape == (num_points, num_points)
+    return distances
 
 def nonzero_coord_array(a):
     """
