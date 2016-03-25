@@ -9,7 +9,7 @@ def wsDtSegmentation(pmap,
                      minSegmentSize,
                      sigmaMinima,
                      sigmaWeights,
-                     cleanCloseSeeds=True,
+                     groupSeeds=True,
                      out_debug_image_dict=None):
     """A probability map 'pmap' is provided and thresholded using pmin.
     This results in a mask. Every connected component which has fewer pixel
@@ -27,7 +27,7 @@ def wsDtSegmentation(pmap,
     segmentation is allowed to be. If there are smaller ones the corresponding
     seeds are deleted and the watershed is done again.
 
-    If 'cleanCloseSeeds' is True, multiple seed points that are clearly in the
+    If 'groupSeeds' is True, multiple seed points that are clearly in the
     same neuron will be merged with a heuristik that ensures that no seeds of
     two different neurons are merged.
     
@@ -45,7 +45,7 @@ def wsDtSegmentation(pmap,
     distance_to_membrane = getSignedDt(pmap, pmin, minMembraneSize, out_debug_image_dict)
     binary_seeds = getDtBinarySeeds(distance_to_membrane, sigmaMinima, out_debug_image_dict)
 
-    if cleanCloseSeeds:
+    if groupSeeds:
         seedsLabeled = group_seeds_by_distance( binary_seeds, distance_to_membrane )
     else:
         seedsLabeled = vigra.analysis.labelMultiArrayWithBackground(binary_seeds)

@@ -35,7 +35,7 @@ class TestWsDtSegmentation(unittest.TestCase):
         pmap = self._gen_input_data(3)
 
         debug_results = {}
-        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, out_debug_image_dict=debug_results)
+        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False, out_debug_image_dict=debug_results)
         seeds = debug_results['seeds'][:]
         assert seeds.max() == 8
         assert ws_output.max() == 8
@@ -54,7 +54,7 @@ class TestWsDtSegmentation(unittest.TestCase):
         pmap = self._gen_input_data(2)
 
         debug_results = {}
-        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, out_debug_image_dict=debug_results)
+        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False, out_debug_image_dict=debug_results)
         seeds = debug_results['seeds'][:]
         assert seeds.max() == 4
         assert ws_output.max() == 4
@@ -83,7 +83,7 @@ class TestWsDtSegmentation(unittest.TestCase):
         pmap[1:50, 13:38, 13:38] = 0
 
         debug_results = {}
-        _ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, out_debug_image_dict=debug_results)
+        _ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False, out_debug_image_dict=debug_results)
         seeds = debug_results['seeds'][:]
         assert seeds.sum() == 1
         assert seeds[0, 25, 25] == 1
@@ -92,14 +92,14 @@ class TestWsDtSegmentation(unittest.TestCase):
         pmap = self._gen_input_data(3)
 
         # Wrap the segmentation function in this decorator, to verify it's memory usage.
-        ws_output = assert_mem_usage_factor(2.5)(wsDtSegmentation)(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False)
+        ws_output = assert_mem_usage_factor(2.5)(wsDtSegmentation)(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False)
         assert ws_output.max() == 8
 
-        # Now try again, with cleanCloseSeeds=True
+        # Now try again, with groupSeeds=True
         # Note: This is a best-case scenario for memory usage, since the memory 
         #       usage of the seed-grouping function depends on the NUMBER of seeds,
         #       and we have very few seeds in this test.
-        ws_output = assert_mem_usage_factor(3.5)(wsDtSegmentation)(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=True)
+        ws_output = assert_mem_usage_factor(3.5)(wsDtSegmentation)(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=True)
         assert ws_output.max() == 8
 
     def test_debug_output(self):
@@ -109,7 +109,7 @@ class TestWsDtSegmentation(unittest.TestCase):
         """
         pmap = self._gen_input_data(3)
         debug_images = {}
-        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, cleanCloseSeeds=False, out_debug_image_dict=debug_images)
+        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False, out_debug_image_dict=debug_images)
         assert ws_output.max() == 8
         
         assert 'thresholded membranes' in debug_images
@@ -136,8 +136,8 @@ class TestWsDtSegmentation(unittest.TestCase):
         101 +------------------+------------------+------------------+
 
         The x and y markers indicate where seeds will end up.
-        With cleanCloseSeeds=False, we would have 4 seed points and 4 final segments.
-        But with cleanCloseSeeds=True, the two x points will end up in the same segment,
+        With groupSeeds=False, we would have 4 seed points and 4 final segments.
+        But with groupSeeds=True, the two x points will end up in the same segment,
         and the two y points will end up in the same segment.
         The lone z point will not be merged with anything
         """
@@ -161,15 +161,15 @@ class TestWsDtSegmentation(unittest.TestCase):
         input_data[-40:-1, 101] = 1
         input_data[-10:-1, 151] = 1
         
-        # First, try without cleanCloseSeeds
+        # First, try without groupSeeds
         debug_results = {}
-        ws_output = wsDtSegmentation(input_data, 0.5, 0, 0, 0.0, 0.0, cleanCloseSeeds=False, out_debug_image_dict=debug_results)
+        ws_output = wsDtSegmentation(input_data, 0.5, 0, 0, 0.0, 0.0, groupSeeds=False, out_debug_image_dict=debug_results)
         assert ws_output.max() == 5
 
-        # Now, with cleanCloseSeeds=True, the left-hand seeds should 
+        # Now, with groupSeeds=True, the left-hand seeds should 
         # be merged and the right-hand seeds should be merged
         debug_results = {}
-        ws_output = wsDtSegmentation(input_data, 0.5, 0, 0, 0.0, 0.0, cleanCloseSeeds=True, out_debug_image_dict=debug_results)
+        ws_output = wsDtSegmentation(input_data, 0.5, 0, 0, 0.0, 0.0, groupSeeds=True, out_debug_image_dict=debug_results)
         assert ws_output.max() == 3
 
         assert (ws_output[:,    0:90] == ws_output[51,51]).all()
