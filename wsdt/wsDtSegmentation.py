@@ -42,24 +42,23 @@ def wsDtSegmentation(pmap,
     # assert that pmap is 2d or 3d
     assert pmap.ndim in (2,3), "Input must be 2D or 3D.  shape={}".format( pmap.shape )
 
-    (signed_dt, dist_to_mem) = getSignedDt(pmap, pmin, minMembraneSize, out_debug_image_dict)
+    distance_to_membrane = getSignedDt(pmap, pmin, minMembraneSize, out_debug_image_dict)
+    binary_seeds = getDtBinarySeeds(distance_to_membrane, sigmaMinima, out_debug_image_dict)
 
     if cleanCloseSeeds:
-        binary_seeds = getDtBinarySeeds(signed_dt, sigmaMinima, out_debug_image_dict)
-        seedsLabeled = group_seeds_by_distance( binary_seeds, dist_to_mem )
+        seedsLabeled = group_seeds_by_distance( binary_seeds, distance_to_membrane )
     else:
-        del dist_to_mem
-        binary_seeds = getDtBinarySeeds(signed_dt, sigmaMinima, out_debug_image_dict)
         seedsLabeled = vigra.analysis.labelMultiArrayWithBackground(binary_seeds)
 
     del binary_seeds
     save_debug_image('seeds', seedsLabeled, out_debug_image_dict)
 
     if sigmaWeights != 0.0:
-        vigra.filters.gaussianSmoothing(signed_dt, sigmaWeights, out=signed_dt)
-        save_debug_image('smoothed DT for watershed', signed_dt, out_debug_image_dict)
+        vigra.filters.gaussianSmoothing(distance_to_membrane, sigmaWeights, out=distance_to_membrane)
+        save_debug_image('smoothed DT for watershed', distance_to_membrane, out_debug_image_dict)
 
-    iterativeWsInplace(signed_dt, seedsLabeled, minSegmentSize, out_debug_image_dict)
+    distance_to_membrane[:] *= -1
+    iterativeWsInplace(distance_to_membrane, seedsLabeled, minSegmentSize, out_debug_image_dict)
     return seedsLabeled
 
 def save_debug_image( name, image, out_debug_image_dict ):
@@ -74,16 +73,24 @@ def save_debug_image( name, image, out_debug_image_dict ):
     out_debug_image_dict[name] = vigra.ChunkedArrayCompressed(image.shape, dtype=image.dtype, axistags=axistags)
     out_debug_image_dict[name][:] = image
 
-def localMinimaND(image, *args, **kwargs):
+def localMaximaND(image, *args, **kwargs):
     assert image.ndim in (2,3), \
         "Unsupported dimensionality: {}".format( image.ndim )
     if image.ndim == 2:
-        return vigra.analysis.localMinima(image, *args, **kwargs)
+        return vigra.analysis.localMaxima(image, *args, **kwargs)
     if image.ndim == 3:
-        return vigra.analysis.localMinima3D(image, *args, **kwargs)
+        return vigra.analysis.localMaxima3D(image, *args, **kwargs)
 
 # get the signed distance transform of pmap
 def getSignedDt(pmap, pmin, minMembraneSize, out_debug_image_dict):
+    """
+    Performs a threshold on the given image 'pmap' > pmin, and performs
+    a distance transform to the threshold border for all pixels outside the
+    threshold boundaries (positive distances) and also all pixels inside
+    the boundary (negative distances).
+    
+    The result is a signed distance transform.
+    """
     # get the thresholded pmap
     binary_membranes = (pmap >= pmin).view(numpy.uint8)
 
@@ -105,29 +112,23 @@ def getSignedDt(pmap, pmin, minMembraneSize, out_debug_image_dict):
     vigra.filters.distanceTransform(labeled, background=False, out=distance_to_nonmembrane)
     del labeled # Delete this name, not the array
 
-    # Combine distance transforms
+    # Combine the inner/outer distance transforms
     distance_to_nonmembrane[distance_to_nonmembrane>0] -= 1
+    distance_to_membrane[:] -= distance_to_nonmembrane
 
-    # Perform this calculation, but in-place to save RAM
-    # dtSigned = distance_to_membrane.max() - distance_to_membrane + distance_to_nonmembrane
-
-    dtSigned = distance_to_nonmembrane
-    dtSigned[:] -= distance_to_membrane
-    dtSigned[:] += distance_to_membrane.max()
-
-    save_debug_image('distance transform', distance_to_nonmembrane, out_debug_image_dict)
-    return (dtSigned, distance_to_membrane)
+    save_debug_image('distance transform', distance_to_membrane, out_debug_image_dict)
+    return distance_to_membrane
 
 # get the seeds from the signed distance transform
-def getDtBinarySeeds(dtSigned, sigmaMinima, out_debug_image_dict):
+def getDtBinarySeeds(distance_to_membrane, sigmaMinima, out_debug_image_dict):
     # Can't work in-place: Not allowed to modify input
-    dtSigned = dtSigned.copy()
+    dtSigned = distance_to_membrane.copy()
 
     if sigmaMinima != 0.0:
         dtSigned = vigra.filters.gaussianSmoothing(dtSigned, sigmaMinima, out=dtSigned)
         save_debug_image('smoothed DT for seeds', dtSigned, out_debug_image_dict)
 
-    localMinimaND(dtSigned, allowPlateaus=True, allowAtBorder=True, marker=numpy.nan, out=dtSigned)
+    localMaximaND(dtSigned, allowPlateaus=True, allowAtBorder=True, marker=numpy.nan, out=dtSigned)
     seedsVolume = numpy.isnan(dtSigned).view(numpy.uint8)
     save_debug_image('binary seeds', dtSigned, out_debug_image_dict)
     return seedsVolume
@@ -147,14 +148,12 @@ def vigra_bincount(labels):
     If your data isn't int64, numpy.bincount() will copy it internally -- a huge RAM overhead.
     (This implementation may also need to make a copy, but it prefers uint32, not int64.)
     """
-    import vigra
-    import numpy as np
-    labels = labels.astype(np.uint32, copy=False)
-    labels = np.ravel(labels, order='K').reshape((-1, 1), order='A')
+    labels = labels.astype(numpy.uint32, copy=False)
+    labels = numpy.ravel(labels, order='K').reshape((-1, 1), order='A')
     # We don't care what the 'image' parameter is, but we have to give something
-    image = labels.view(np.float32)
+    image = labels.view(numpy.float32)
     counts = vigra.analysis.extractRegionFeatures(image, labels, ['Count'])['Count']
-    return counts.astype(np.int64)
+    return counts.astype(numpy.int64)
 
 def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_place=False, bin_out=False):
     original_dtype = a.dtype
@@ -184,33 +183,43 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane):
     """
     Label seeds in groups, such that every seed in each group is closer to at
     least one other seed in its group than it is to the nearest membrane.
+    
+    Warning: The RAM needed by this function is proportional to N**2,
+             where N is the number of seed points in the image.
+             Consider breaking your image into blocks and processing them sequentially.
+    
+    Parameters
+    ----------
+    binary_seeds
+        A boolean image indicating where the seeds are
+    
+    distance_to_membrane
+        A float32 image of distances to the membranes
 
     Returns a label image.
     """
     seed_locations = nonzero_coord_array(binary_seeds)
     assert seed_locations.shape[1] == binary_seeds.ndim
     num_seeds = seed_locations.shape[0]
-
-    # Save some RAM by shrinking the dtype now
-    if seed_locations.max() < 1<<15:
-        seed_locations = seed_locations.astype(numpy.int16)
-    else:
-        seed_locations = seed_locations.astype(numpy.int32)
+    
+    # Save RAM: shrink the dtype if possible
+    if seed_locations.max() < numpy.sqrt(2**31):
+        seed_locations = seed_locations.astype( numpy.int32 )
 
     # Compute the distance of each seed to all other seeds
-    distances = pairwise_euclidean_distances(seed_locations)
+    pairwise_distances = pairwise_euclidean_distances(seed_locations)
 
-    # Extract the distance of each seed to the nearest membrane
+    # Extract the distance of each seed point to the nearest membrane
     point_distances_to_membrane = distance_to_membrane[tuple(seed_locations.transpose())]
     
     # Find the seed pairs that are closer to each other than they are to a membrane
-    valid_edges = numpy.ones( distances.shape, dtype=numpy.bool_ )
-    valid_edges = numpy.logical_and( valid_edges, ( distances < point_distances_to_membrane[:, None] ), out=valid_edges )
-    valid_edges = numpy.logical_and( valid_edges, ( distances < point_distances_to_membrane[None, :] ), out=valid_edges )
+    group_edges = numpy.ones( pairwise_distances.shape, dtype=numpy.bool_ )
+    group_edges = numpy.logical_and( group_edges, (pairwise_distances < point_distances_to_membrane[:, None]), out=group_edges )
+    group_edges = numpy.logical_and( group_edges, (pairwise_distances < point_distances_to_membrane[None, :]), out=group_edges )
 
     # Create a graph where each edge is a valid pair as determined above.
     # (Note that self->self edges are included in this graph, since that distance is 0.0)
-    seed_graph = nx.Graph( iter(nonzero_coord_array(valid_edges)) )
+    seed_graph = nx.Graph( iter(nonzero_coord_array(group_edges)) )
     seed_labels = numpy.zeros( (num_seeds,), dtype=numpy.uint32 )
 
     # Find the connected components in the graph, and give each CC a unique ID, starting at 1.
@@ -229,11 +238,15 @@ def pairwise_euclidean_distances( coord_array ):
     return a symmetric array of shape (N,N) of the distances
     of each item to all others.
     """
+    assert numpy.issubdtype(coord_array.dtype, numpy.signedinteger), \
+        "The coordinate array dtype must be signed, and large enough "\
+        "to hold the square of the maximum coordinate."
+
     num_points = len(coord_array)
     ndim = coord_array.shape[-1]
     subtracted = numpy.ndarray( (num_points, num_points, ndim), dtype=numpy.float32 )
     for i in range(coord_array.shape[-1]):
-        subtracted[...,i] = numpy.subtract.outer(coord_array[...,i], coord_array[...,i])
+        numpy.subtract.outer(coord_array[...,i], coord_array[...,i], out=subtracted[...,i])
     abs_subtracted = numpy.abs(subtracted, out=subtracted)
 
     squared_distances = numpy.add.reduce(numpy.power(abs_subtracted, 2), axis=-1)

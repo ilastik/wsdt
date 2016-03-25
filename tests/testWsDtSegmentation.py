@@ -122,17 +122,18 @@ class TestWsDtSegmentation(unittest.TestCase):
         """
         In this test we'll use input data that looks roughly like the following:
         
-        +------------------+------------------+------------------+
-        |        |         |        |         |                  |
-        |                  |                  |                  |
-        |                  |                  |                  |
-        |                                     |                  |
-        |   x         x         y        y    |        z         |
-        |                                     |                  |
-        |                  |                  |                  |
-        |                  |                  |                  |
-        |        |         |        |         |                  |
-        +------------------+------------------+------------------+
+            0                 101                202                303
+          0 +------------------+------------------+------------------+
+            |        |         |        |         |                  |
+            |                  |                  |                  |
+            |                  |                  |                  |
+            |                                     |                  |
+         51 |   x         x         y        y    |        z         |
+            |                                     |                  |
+            |                  |                  |                  |
+            |                  |                  |                  |
+            |        |         |        |         |                  |
+        101 +------------------+------------------+------------------+
 
         The x and y markers indicate where seeds will end up.
         With cleanCloseSeeds=False, we would have 4 seed points and 4 final segments.
@@ -141,7 +142,7 @@ class TestWsDtSegmentation(unittest.TestCase):
         The lone z point will not be merged with anything
         """
         
-        input_data = np.zeros((101, 301), dtype=np.float32)
+        input_data = np.zeros((101, 303), dtype=np.float32)
         
         # Add borders
         input_data[0] = 1
@@ -150,15 +151,15 @@ class TestWsDtSegmentation(unittest.TestCase):
         input_data[:, -1] = 1
 
         # Add complete divider for the z compartment
-        input_data[:, 201] = 1
+        input_data[:, 202] = 1
 
         # Add notches extending from the upper/lower borders
-        input_data[1:5,   51] = 1
-        input_data[1:40, 101] = 1
-        input_data[1:5,  151] = 1
-        input_data[-5:-1,   51] = 1
+        input_data[1:10,    51] = 1
+        input_data[1:40,   101] = 1
+        input_data[1:10,   151] = 1
+        input_data[-10:-1,  51] = 1
         input_data[-40:-1, 101] = 1
-        input_data[-5:-1,  151] = 1
+        input_data[-10:-1, 151] = 1
         
         # First, try without cleanCloseSeeds
         debug_results = {}
@@ -170,14 +171,13 @@ class TestWsDtSegmentation(unittest.TestCase):
         debug_results = {}
         ws_output = wsDtSegmentation(input_data, 0.5, 0, 0, 0.0, 0.0, cleanCloseSeeds=True, out_debug_image_dict=debug_results)
         assert ws_output.max() == 3
-        
-        # Every segment has a consistent value throughout
-        assert (ws_output[:, :101] == ws_output[0,0]).all()
-        assert (ws_output[:, 102:200] == ws_output[0, 102]).all()
-        assert (ws_output[:, 202:] == ws_output[0, 202]).all()
+
+        assert (ws_output[:,    0:90] == ws_output[51,51]).all()
+        assert (ws_output[:, 110:190] == ws_output[51, 151]).all()
+        assert (ws_output[:, 210:290] == ws_output[51, 251]).all()
         
         # The segment values are different
-        assert ws_output[0,0] != ws_output[0, 102] != ws_output[0, 202]
+        assert ws_output[51,51] != ws_output[51, 151] != ws_output[51, 251]
 
 if __name__ == "__main__":
     import sys
