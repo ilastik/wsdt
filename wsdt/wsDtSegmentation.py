@@ -2,15 +2,7 @@ import numpy
 import vigra
 import networkx as nx
 
-# This code was adapted from the version in Timo's fork of vigra.
-def wsDtSegmentation(pmap,
-                     pmin,
-                     minMembraneSize,
-                     minSegmentSize,
-                     sigmaMinima,
-                     sigmaWeights,
-                     groupSeeds=True,
-                     out_debug_image_dict=None):
+def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, sigmaWeights, groupSeeds=True, out_debug_image_dict=None):
     """A probability map 'pmap' is provided and thresholded using pmin.
     This results in a mask. Every connected component which has fewer pixel
     than 'minMembraneSize' is deleted from the mask. The mask is used to
@@ -33,17 +25,19 @@ def wsDtSegmentation(pmap,
     
     If 'out_debug_image_dict' is not None, it must be a dict, and this function
     will save intermediate results to the dict as vigra.ChunkedArrayCompressed objects.
+    
+    Implementation Note: This algorithm has the potential to use a lot of RAM, so this
+                         code goes attempts to operate *in-place* on large arrays whenever
+                         possible, and we also delete intermediate results soon
+                         as possible, sometimes in the middle of a function.
     """
     assert out_debug_image_dict is None or isinstance(out_debug_image_dict, dict)
-    # FIXME: This shouldn't be...
-    assert type(pmap) is numpy.ndarray, \
-        "Make sure that pmap is a plain numpy array, instead of: " + str(type(pmap))
-
-    # assert that pmap is 2d or 3d
+    assert isinstance(pmap, numpy.ndarray), \
+        "Make sure that pmap is numpy array, instead of: " + str(type(pmap))
     assert pmap.ndim in (2,3), "Input must be 2D or 3D.  shape={}".format( pmap.shape )
 
-    distance_to_membrane = getSignedDt(pmap, pmin, minMembraneSize, out_debug_image_dict)
-    binary_seeds = getDtBinarySeeds(distance_to_membrane, sigmaMinima, out_debug_image_dict)
+    distance_to_membrane = signed_distance_transform(pmap, pmin, minMembraneSize, out_debug_image_dict)
+    binary_seeds = binary_seeds_from_distance_transform(distance_to_membrane, sigmaMinima, out_debug_image_dict)
 
     if groupSeeds:
         seedsLabeled = group_seeds_by_distance( binary_seeds, distance_to_membrane )
@@ -57,39 +51,19 @@ def wsDtSegmentation(pmap,
         vigra.filters.gaussianSmoothing(distance_to_membrane, sigmaWeights, out=distance_to_membrane)
         save_debug_image('smoothed DT for watershed', distance_to_membrane, out_debug_image_dict)
 
+    # Invert the DT: Watershed code requires seeds to be at minimums, not maximums
     distance_to_membrane[:] *= -1
-    iterativeWsInplace(distance_to_membrane, seedsLabeled, minSegmentSize, out_debug_image_dict)
+    iterative_inplace_watershed(distance_to_membrane, seedsLabeled, minSegmentSize, out_debug_image_dict)
     return seedsLabeled
 
-def save_debug_image( name, image, out_debug_image_dict ):
-    if out_debug_image_dict is None:
-        return
-    
-    if hasattr(image, 'axistags'):
-        axistags=image.axistags
-    else:
-        axistags = None
-
-    out_debug_image_dict[name] = vigra.ChunkedArrayCompressed(image.shape, dtype=image.dtype, axistags=axistags)
-    out_debug_image_dict[name][:] = image
-
-def localMaximaND(image, *args, **kwargs):
-    assert image.ndim in (2,3), \
-        "Unsupported dimensionality: {}".format( image.ndim )
-    if image.ndim == 2:
-        return vigra.analysis.localMaxima(image, *args, **kwargs)
-    if image.ndim == 3:
-        return vigra.analysis.localMaxima3D(image, *args, **kwargs)
-
-# get the signed distance transform of pmap
-def getSignedDt(pmap, pmin, minMembraneSize, out_debug_image_dict):
+def signed_distance_transform(pmap, pmin, minMembraneSize, out_debug_image_dict):
     """
     Performs a threshold on the given image 'pmap' > pmin, and performs
-    a distance transform to the threshold border for all pixels outside the
-    threshold boundaries (positive distances) and also all pixels inside
+    a distance transform to the threshold region border for all pixels outside the
+    threshold boundaries (positive distances) and also all pixels *inside*
     the boundary (negative distances).
     
-    The result is a signed distance transform.
+    The result is a signed float32 image.
     """
     # get the thresholded pmap
     binary_membranes = (pmap >= pmin).view(numpy.uint8)
@@ -119,22 +93,32 @@ def getSignedDt(pmap, pmin, minMembraneSize, out_debug_image_dict):
     save_debug_image('distance transform', distance_to_membrane, out_debug_image_dict)
     return distance_to_membrane
 
-# get the seeds from the signed distance transform
-def getDtBinarySeeds(distance_to_membrane, sigmaMinima, out_debug_image_dict):
+def binary_seeds_from_distance_transform(distance_to_membrane, smoothingSigma, out_debug_image_dict):
+    """
+    Return a binary image indicating the local maxima of the given distance transform.
+    
+    If smoothingSigma is provided, pre-smooth the distance transform before locating local maxima.
+    """
     # Can't work in-place: Not allowed to modify input
-    dtSigned = distance_to_membrane.copy()
+    distance_to_membrane = distance_to_membrane.copy()
 
-    if sigmaMinima != 0.0:
-        dtSigned = vigra.filters.gaussianSmoothing(dtSigned, sigmaMinima, out=dtSigned)
-        save_debug_image('smoothed DT for seeds', dtSigned, out_debug_image_dict)
+    if smoothingSigma != 0.0:
+        distance_to_membrane = vigra.filters.gaussianSmoothing(distance_to_membrane, smoothingSigma, out=distance_to_membrane)
+        save_debug_image('smoothed DT for seeds', distance_to_membrane, out_debug_image_dict)
 
-    localMaximaND(dtSigned, allowPlateaus=True, allowAtBorder=True, marker=numpy.nan, out=dtSigned)
-    seedsVolume = numpy.isnan(dtSigned)
+    localMaximaND(distance_to_membrane, allowPlateaus=True, allowAtBorder=True, marker=numpy.nan, out=distance_to_membrane)
+    seedsVolume = numpy.isnan(distance_to_membrane)
     save_debug_image('binary seeds', seedsVolume.view(numpy.uint8), out_debug_image_dict)
     return seedsVolume
 
-# perform watershed on weights and seeds INPLACE on the seeds
-def iterativeWsInplace(weights, seedsLabeled, minSegmentSize, out_debug_image_dict):
+def iterative_inplace_watershed(weights, seedsLabeled, minSegmentSize, out_debug_image_dict):
+    """
+    Perform a watershed over an image using the given seed image.
+    The watershed is written IN-PLACE into the seed image.
+    
+    If minSegmentSize is provided, then watershed segments that were too small will be removed,
+    and a second watershed will be performed so that the larger segments can claim the gaps.
+    """
     vigra.analysis.watershedsNew(weights, seeds=seedsLabeled, out=seedsLabeled)[0]
 
     if minSegmentSize:
@@ -156,6 +140,10 @@ def vigra_bincount(labels):
     return counts.astype(numpy.int64)
 
 def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_place=False, bin_out=False):
+    """
+    Given a label image remove (set to zero) labels whose count is too low or too high.
+    (Copied from lazyflow.)
+    """
     original_dtype = a.dtype
 
     if not in_place:
@@ -197,7 +185,9 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane):
     distance_to_membrane
         A float32 image of distances to the membranes
 
-    Returns a label image.
+    Returns
+    -------
+        A label image.  Seeds in the same group have the same label value.
     """
     seed_locations = nonzero_coord_array(binary_seeds)
     assert seed_locations.shape[1] == binary_seeds.ndim
@@ -212,10 +202,10 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane):
     pairwise_distances = pairwise_euclidean_distances(seed_locations)
     del seed_locations
 
-    # Extract the distance of each seed point to the nearest membrane
+    # From the distance transform image, extract each seed's distance to the nearest membrane
     point_distances_to_membrane = distance_to_membrane[binary_seeds]
     
-    # Find the seed pairs that are closer to each other either of them is to a membrane.
+    # Find the seed pairs that are closer to each other than either of them is to a membrane.
     close_pairs     = (pairwise_distances < point_distances_to_membrane[:, None])
     close_pairs[:] &= (pairwise_distances < point_distances_to_membrane[None, :])
 
@@ -223,15 +213,18 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane):
     del pairwise_distances
     del point_distances_to_membrane
 
-    # Create a graph of the seed points containing only the connections between 'close' seeds as found above.
+    # Create a graph of the seed points containing only the connections between 'close' seeds, as found above.
     # (Note that self->self edges are included in this graph, since that distance is 0.0)
+    # Technically, we're adding every edge twice because the close_pairs matrix is symmetric.  Oh well.
     seed_graph = nx.Graph( iter(nonzero_coord_array(close_pairs)) )
-    seed_labels = numpy.zeros( (num_seeds,), dtype=numpy.uint32 )
+    del close_pairs
 
     # Find the connected components in the graph, and give each CC a unique ID, starting at 1.
+    seed_labels = numpy.zeros( (num_seeds,), dtype=numpy.uint32 )
     for group_label, grouped_seed_indexes in enumerate(nx.connected_components(seed_graph), start=1):
         for seed_index in grouped_seed_indexes:
             seed_labels[seed_index] = group_label
+    del seed_graph
 
     # Apply the new labels to the original image
     labeled_seed_img = numpy.zeros( binary_seeds.shape, dtype=numpy.uint32 )
@@ -250,11 +243,12 @@ def pairwise_euclidean_distances( coord_array ):
 
     num_points = len(coord_array)
     ndim = coord_array.shape[-1]
-    subtracted = numpy.ndarray( (num_points, num_points, ndim), dtype=numpy.float32 )
-    for i in range(coord_array.shape[-1]):
-        numpy.subtract.outer(coord_array[...,i], coord_array[...,i], out=subtracted[...,i])
-    abs_subtracted = numpy.abs(subtracted, out=subtracted)
 
+    subtracted = numpy.ndarray( (num_points, num_points, ndim), dtype=numpy.float32 )
+    for i in range(ndim):
+        numpy.subtract.outer(coord_array[...,i], coord_array[...,i], out=subtracted[...,i])
+    
+    abs_subtracted = numpy.abs(subtracted, out=subtracted)
     squared_distances = numpy.add.reduce(numpy.power(abs_subtracted, 2), axis=-1)
     distances = numpy.sqrt(squared_distances, out=squared_distances)
     assert distances.shape == (num_points, num_points)
@@ -277,3 +271,30 @@ def nonzero_coord_array(a):
     while base_array.base is not None:
         base_array = base_array.base
     return base_array
+
+def localMaximaND(image, *args, **kwargs):
+    """
+    An ND wrapper for vigra's 2D/3D localMaxima functions.
+    """
+    assert image.ndim in (2,3), \
+        "Unsupported dimensionality: {}".format( image.ndim )
+    if image.ndim == 2:
+        return vigra.analysis.localMaxima(image, *args, **kwargs)
+    if image.ndim == 3:
+        return vigra.analysis.localMaxima3D(image, *args, **kwargs)
+
+def save_debug_image( name, image, out_debug_image_dict ):
+    """
+    If output_debug_image_dict isn't None, save the
+    given image in the dict as a compressed array.
+    """
+    if out_debug_image_dict is None:
+        return
+    
+    if hasattr(image, 'axistags'):
+        axistags=image.axistags
+    else:
+        axistags = None
+
+    out_debug_image_dict[name] = vigra.ChunkedArrayCompressed(image.shape, dtype=image.dtype, axistags=axistags)
+    out_debug_image_dict[name][:] = image
