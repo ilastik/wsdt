@@ -7,7 +7,7 @@ source:
   git_tag: HEAD
 
 build:
-  number: 3
+  number: 4
   string: py27_{{PKG_BUILDNUM}}_g{{GIT_FULL_HASH[:7]}}
 
 requirements:
@@ -19,6 +19,7 @@ requirements:
     - python 2.7*
     - numpy
     - vigra >=1.11
+    - networkx
 
 test:
   requires:
@@ -29,6 +30,4 @@ test:
     - wsdt
   
 about:
-  home: https://github.com/stuarteberg/wsdt
-  license: None
   summary: Implementation of a distance-transform-based watershed algorithm
