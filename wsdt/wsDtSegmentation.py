@@ -48,7 +48,7 @@ def wsDtSegmentation(pmap,
     if groupSeeds:
         seedsLabeled = group_seeds_by_distance( binary_seeds, distance_to_membrane )
     else:
-        seedsLabeled = vigra.analysis.labelMultiArrayWithBackground(binary_seeds)
+        seedsLabeled = vigra.analysis.labelMultiArrayWithBackground(binary_seeds.view(numpy.uint8))
 
     del binary_seeds
     save_debug_image('seeds', seedsLabeled, out_debug_image_dict)
@@ -129,8 +129,8 @@ def getDtBinarySeeds(distance_to_membrane, sigmaMinima, out_debug_image_dict):
         save_debug_image('smoothed DT for seeds', dtSigned, out_debug_image_dict)
 
     localMaximaND(dtSigned, allowPlateaus=True, allowAtBorder=True, marker=numpy.nan, out=dtSigned)
-    seedsVolume = numpy.isnan(dtSigned).view(numpy.uint8)
-    save_debug_image('binary seeds', dtSigned, out_debug_image_dict)
+    seedsVolume = numpy.isnan(dtSigned)
+    save_debug_image('binary seeds', seedsVolume.view(numpy.uint8), out_debug_image_dict)
     return seedsVolume
 
 # perform watershed on weights and seeds INPLACE on the seeds
@@ -186,6 +186,7 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane):
     
     Warning: The RAM needed by this function is proportional to N**2,
              where N is the number of seed points in the image.
+             For example, for 50,000 seed points, this function needs more than 10 GB of RAM.
              Consider breaking your image into blocks and processing them sequentially.
     
     Parameters
@@ -207,19 +208,24 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane):
         seed_locations = seed_locations.astype( numpy.int32 )
 
     # Compute the distance of each seed to all other seeds
+    # This matrix might be huge (see warning above).
     pairwise_distances = pairwise_euclidean_distances(seed_locations)
+    del seed_locations
 
     # Extract the distance of each seed point to the nearest membrane
-    point_distances_to_membrane = distance_to_membrane[tuple(seed_locations.transpose())]
+    point_distances_to_membrane = distance_to_membrane[binary_seeds]
     
-    # Find the seed pairs that are closer to each other than they are to a membrane
-    group_edges = numpy.ones( pairwise_distances.shape, dtype=numpy.bool_ )
-    group_edges = numpy.logical_and( group_edges, (pairwise_distances < point_distances_to_membrane[:, None]), out=group_edges )
-    group_edges = numpy.logical_and( group_edges, (pairwise_distances < point_distances_to_membrane[None, :]), out=group_edges )
+    # Find the seed pairs that are closer to each other either of them is to a membrane.
+    close_pairs     = (pairwise_distances < point_distances_to_membrane[:, None])
+    close_pairs[:] &= (pairwise_distances < point_distances_to_membrane[None, :])
 
-    # Create a graph where each edge is a valid pair as determined above.
+    # Delete these big arrays now that we're done with them
+    del pairwise_distances
+    del point_distances_to_membrane
+
+    # Create a graph of the seed points containing only the connections between 'close' seeds as found above.
     # (Note that self->self edges are included in this graph, since that distance is 0.0)
-    seed_graph = nx.Graph( iter(nonzero_coord_array(group_edges)) )
+    seed_graph = nx.Graph( iter(nonzero_coord_array(close_pairs)) )
     seed_labels = numpy.zeros( (num_seeds,), dtype=numpy.uint32 )
 
     # Find the connected components in the graph, and give each CC a unique ID, starting at 1.
@@ -229,7 +235,7 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane):
 
     # Apply the new labels to the original image
     labeled_seed_img = numpy.zeros( binary_seeds.shape, dtype=numpy.uint32 )
-    labeled_seed_img[tuple(seed_locations.transpose())] = seed_labels
+    labeled_seed_img[binary_seeds] = seed_labels
     return labeled_seed_img
     
 def pairwise_euclidean_distances( coord_array ):
