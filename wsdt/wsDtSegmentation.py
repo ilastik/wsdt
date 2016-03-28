@@ -174,7 +174,9 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane):
     
     Warning: The RAM needed by this function is proportional to N**2,
              where N is the number of seed points in the image.
-             For example, for 50,000 seed points, this function needs more than 10 GB of RAM.
+             For example, for 25,000 seed points, this function needs more than 5.5 GB of RAM.
+             For 50,000 seed points, it needs more than 22 GB.
+             
              Consider breaking your image into blocks and processing them sequentially.
     
     Parameters
@@ -231,28 +233,45 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane):
     labeled_seed_img[binary_seeds] = seed_labels
     return labeled_seed_img
     
-def pairwise_euclidean_distances( coord_array ):
+def pairwise_euclidean_distances( coord_array, MAX_ALLOWED_RAM_USAGE=2e9 ):
     """
     For all coordinates in the given array of shape (N, DIM),
     return a symmetric array of shape (N,N) of the distances
     of each item to all others.
+
+    If the length of coord_array is large enough that this function
+    would need more than MAX_ALLOWED_RAM_USAGE (in bytes), then an
+    exception will be raised instead of attempting to allocate a huge array.
+    
+    Equivalent to:
+    
+    >>> from scipy.spatial.distance import pdist, squareform
+    >>> def pairwise_euclidean_distances(coord_array):
+    ...     distances = squareform( pdist(coord_array) )
+    ...     return distances.astype(numpy.float32)
+    
+    ...but internally operates on 32-bit types, not float64
     """
     assert numpy.issubdtype(coord_array.dtype, numpy.signedinteger), \
         "The coordinate array dtype must be signed, and large enough "\
         "to hold the square of the maximum coordinate."
 
-    num_points = len(coord_array)
+    N = len(coord_array)
     ndim = coord_array.shape[-1]
 
-    subtracted = numpy.ndarray( (num_points, num_points, ndim), dtype=numpy.float32 )
+    # This function uses two arrays of N*N*(4 bytes): one temporary and one for the result
+    if 2*4*(N**2) > MAX_ALLOWED_RAM_USAGE:
+        raise RuntimeError("Too many points: {}".format(N))
+
+    distances = numpy.zeros((N,N), dtype=numpy.float32)
     for i in range(ndim):
-        numpy.subtract.outer(coord_array[...,i], coord_array[...,i], out=subtracted[...,i])
-    
-    abs_subtracted = numpy.abs(subtracted, out=subtracted)
-    squared_distances = numpy.add.reduce(numpy.power(abs_subtracted, 2), axis=-1)
-    distances = numpy.sqrt(squared_distances, out=squared_distances)
-    assert distances.shape == (num_points, num_points)
+        pairwise_subtracted = numpy.subtract.outer(coord_array[:,i], coord_array[:,i])
+        squared = numpy.power(pairwise_subtracted, 2, out=pairwise_subtracted)
+        distances[:] += squared
+
+    numpy.sqrt(distances, out=distances)
     return distances
+
 
 def nonzero_coord_array(a):
     """
