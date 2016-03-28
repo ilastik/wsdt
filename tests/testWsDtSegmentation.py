@@ -179,6 +179,25 @@ class TestWsDtSegmentation(unittest.TestCase):
         # The segment values are different
         assert ws_output[51,51] != ws_output[51, 151] != ws_output[51, 251]
 
+    def test_out_param(self):
+        pmap = self._gen_input_data(2)
+
+        debug_results = {}
+        preallocated = np.random.randint( 0, 100, pmap.shape ).astype(np.uint32)
+        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False, out_debug_image_dict=debug_results, out=preallocated)
+        assert ws_output is preallocated
+        seeds = debug_results['seeds'][:]
+        assert seeds.max() == 4
+        assert ws_output.max() == 4
+
+        # Also with groupSeeds=True
+        preallocated = np.random.randint( 0, 100, pmap.shape ).astype(np.uint32)
+        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=True, out_debug_image_dict=debug_results, out=preallocated)
+        assert ws_output is preallocated
+        assert seeds.max() == 4
+        assert ws_output.max() == 4
+
+
 if __name__ == "__main__":
     import sys
     import logging

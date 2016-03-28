@@ -2,7 +2,7 @@ import numpy
 import vigra
 import networkx as nx
 
-def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, sigmaWeights, groupSeeds=True, out_debug_image_dict=None):
+def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, sigmaWeights, groupSeeds=True, out_debug_image_dict=None, out=None):
     """A probability map 'pmap' is provided and thresholded using pmin.
     This results in a mask. Every connected component which has fewer pixel
     than 'minMembraneSize' is deleted from the mask. The mask is used to
@@ -40,12 +40,12 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     binary_seeds = binary_seeds_from_distance_transform(distance_to_membrane, sigmaMinima, out_debug_image_dict)
 
     if groupSeeds:
-        seedsLabeled = group_seeds_by_distance( binary_seeds, distance_to_membrane )
+        labeled_seeds = group_seeds_by_distance( binary_seeds, distance_to_membrane, out=out )
     else:
-        seedsLabeled = vigra.analysis.labelMultiArrayWithBackground(binary_seeds.view(numpy.uint8))
+        labeled_seeds = vigra.analysis.labelMultiArrayWithBackground(binary_seeds.view(numpy.uint8), out=out)
 
     del binary_seeds
-    save_debug_image('seeds', seedsLabeled, out_debug_image_dict)
+    save_debug_image('seeds', labeled_seeds, out_debug_image_dict)
 
     if sigmaWeights != 0.0:
         vigra.filters.gaussianSmoothing(distance_to_membrane, sigmaWeights, out=distance_to_membrane)
@@ -53,8 +53,8 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
 
     # Invert the DT: Watershed code requires seeds to be at minimums, not maximums
     distance_to_membrane[:] *= -1
-    iterative_inplace_watershed(distance_to_membrane, seedsLabeled, minSegmentSize, out_debug_image_dict)
-    return seedsLabeled
+    iterative_inplace_watershed(distance_to_membrane, labeled_seeds, minSegmentSize, out_debug_image_dict)
+    return labeled_seeds
 
 def signed_distance_transform(pmap, pmin, minMembraneSize, out_debug_image_dict):
     """
@@ -167,7 +167,7 @@ def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_pla
         numpy.place(a,a,1)
     return numpy.asarray(a, dtype=original_dtype)
 
-def group_seeds_by_distance(binary_seeds, distance_to_membrane):
+def group_seeds_by_distance(binary_seeds, distance_to_membrane, out=None):
     """
     Label seeds in groups, such that every seed in each group is closer to at
     least one other seed in its group than it is to the nearest membrane.
@@ -186,15 +186,19 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane):
     
     distance_to_membrane
         A float32 image of distances to the membranes
+    
+    out
+        Optional.  Must be uint32, same shape as binary_seeds.
 
     Returns
     -------
-        A label image.  Seeds in the same group have the same label value.
+        A label image, uint32.
+        Grouped seeds will have the same label value.
     """
     seed_locations = nonzero_coord_array(binary_seeds)
     assert seed_locations.shape[1] == binary_seeds.ndim
     num_seeds = seed_locations.shape[0]
-    
+
     # Save RAM: shrink the dtype if possible
     if seed_locations.max() < numpy.sqrt(2**31):
         seed_locations = seed_locations.astype( numpy.int32 )
@@ -229,7 +233,13 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane):
     del seed_graph
 
     # Apply the new labels to the original image
-    labeled_seed_img = numpy.zeros( binary_seeds.shape, dtype=numpy.uint32 )
+    labeled_seed_img = out
+    if labeled_seed_img is None:
+        labeled_seed_img = numpy.zeros( binary_seeds.shape, dtype=numpy.uint32 )
+    else:
+        labeled_seed_img[:] = 0
+        assert labeled_seed_img.shape == binary_seeds.shape
+        assert labeled_seed_img.dtype == numpy.uint32
     labeled_seed_img[binary_seeds] = seed_labels
     return labeled_seed_img
     
