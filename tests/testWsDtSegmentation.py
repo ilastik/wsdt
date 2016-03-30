@@ -122,18 +122,18 @@ class TestWsDtSegmentation(unittest.TestCase):
         """
         In this test we'll use input data that looks roughly like the following:
         
-            0                 101                202                303
-          0 +------------------+------------------+------------------+
-            |        |         |        |         |                  |
-            |                  |                  |                  |
-            |                  |                  |                  |
-            |                                     |                  |
-         51 |   x         x         y        y    |        z         |
-            |                                     |                  |
-            |                  |                  |                  |
-            |                  |                  |                  |
-            |        |         |        |         |                  |
-        101 +------------------+------------------+------------------+
+            0                101               202               303
+          0 +-----------------+-----------------+-----------------+
+            |        |        |        |        |                 |
+            |                 |                 |                 |
+            |                 |                 |                 |
+            |                                   |                 |
+         50 |      x   x             y   y      |        z        |
+            |                                   |                 |
+            |                 |                 |                 |
+            |                 |                 |                 |
+            |        |        |        |        |                 |
+        101 +-----------------+-----------------+-----------------+
 
         The x and y markers indicate where seeds will end up.
         With groupSeeds=False, we would have 4 seed points and 4 final segments.
@@ -154,9 +154,9 @@ class TestWsDtSegmentation(unittest.TestCase):
         input_data[:, 202] = 1
 
         # Add notches extending from the upper/lower borders
-        input_data[1:10,    51] = 1
-        input_data[1:40,   101] = 1
-        input_data[1:10,   151] = 1
+        input_data[  1:10,  51] = 1
+        input_data[  1:40, 101] = 1
+        input_data[  1:10, 151] = 1
         input_data[-10:-1,  51] = 1
         input_data[-40:-1, 101] = 1
         input_data[-10:-1, 151] = 1
@@ -172,7 +172,7 @@ class TestWsDtSegmentation(unittest.TestCase):
         ws_output = wsDtSegmentation(input_data, 0.5, 0, 0, 0.0, 0.0, groupSeeds=True, out_debug_image_dict=debug_results)
         assert ws_output.max() == 3
 
-        assert (ws_output[:,    0:90] == ws_output[51,51]).all()
+        assert (ws_output[:,   0: 90] == ws_output[51,  51]).all()
         assert (ws_output[:, 110:190] == ws_output[51, 151]).all()
         assert (ws_output[:, 210:290] == ws_output[51, 251]).all()
         
