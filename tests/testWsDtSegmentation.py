@@ -118,7 +118,7 @@ class TestWsDtSegmentation(unittest.TestCase):
         assert 'filtered membranes' in debug_images
         assert debug_images['filtered membranes'].shape == ws_output.shape
 
-    def test_clean_close_seeds(self):
+    def test_group_close_seeds(self):
         """
         In this test we'll use input data that looks roughly like the following:
         
@@ -178,6 +178,46 @@ class TestWsDtSegmentation(unittest.TestCase):
         
         # The segment values are different
         assert ws_output[51,51] != ws_output[51, 151] != ws_output[51, 251]
+
+    def test_group_seeds_ram_usage(self):
+        """
+        The original implementation of the groupSeeds option needed
+        a lot of RAM, scaliing with the number of seeds by N**2.
+        The new implementation does the work in batches, so it
+        doesn't need as much RAM.  
+        
+        Here we create a test image that will result in lots of seeds,
+        and we'll verify that RAM usage stays under control.
+        
+        The test image looks roughly like this (seeds marked with 'x'):
+        
+        +-----------------------------------------------------+
+        |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+        |                                                     |
+        |                                                     |
+        |       x  x  x  x  x  x  x  x  x  x  x  x  x  x      |
+        |                                                     |
+        |                                                     |
+        +-----------------------------------------------------+
+        """
+        input_data = np.zeros((101, 20001), dtype=np.float32)
+
+        # Add borders
+        input_data[0] = 1
+        input_data[-1] = 1
+        input_data[:, 0] = 1
+        input_data[:, -1] = 1
+
+        # Add tick marks
+        input_data[:10, ::10] = 1
+        
+        # Sanity check, try without groupSeeds, make sure we've got a lot of segments
+        ws_output = wsDtSegmentation(input_data, 0.5, 0, 0, 0.0, 0.0, groupSeeds=False)
+        assert ws_output.max() > 1900
+
+        # Now check RAM with groupSeeds=True
+        ws_output = assert_mem_usage_factor(3.0)(wsDtSegmentation)(input_data, 0.5, 0, 0, 0.0, 0.0, groupSeeds=True)
+        assert ws_output.max() == 1        
 
     def test_out_param(self):
         pmap = self._gen_input_data(2)

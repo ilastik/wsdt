@@ -203,28 +203,52 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane, out=None):
     if seed_locations.max() < numpy.sqrt(2**31):
         seed_locations = seed_locations.astype( numpy.int32 )
 
-    # Compute the distance of each seed to all other seeds
-    # This matrix might be huge (see warning above).
-    pairwise_distances = pairwise_euclidean_distances(seed_locations)
-    del seed_locations
-
     # From the distance transform image, extract each seed's distance to the nearest membrane
     point_distances_to_membrane = distance_to_membrane[binary_seeds]
-    
-    # Find the seed pairs that are closer to each other than either of them is to a membrane.
-    close_pairs     = (pairwise_distances < point_distances_to_membrane[:, None])
-    close_pairs[:] &= (pairwise_distances < point_distances_to_membrane[None, :])
 
-    # Delete these big arrays now that we're done with them
-    del pairwise_distances
-    del point_distances_to_membrane
-
-    # Create a graph of the seed points containing only the connections between 'close' seeds, as found above.
+    # Create a graph of the seed points containing only the connections between 'close' seeds, as found below.
     # (Note that self->self edges are included in this graph, since that distance is 0.0)
-    # Technically, we're adding every edge twice because the close_pairs matrix is symmetric.  Oh well.
-    seed_graph = nx.Graph( iter(nonzero_coord_array(close_pairs)) )
-    del close_pairs
+    seed_graph = nx.Graph()
+    
+    # We'll find the distances between all points A and B,
+    # but do it in batches since it takes a lot of RAM.
+    # How big should the batches be?
+    # We'll pick a batch size that
+    # requires about as much RAM as the original input data.
+    # RAM need per batch is 2*4*N*N bytes
+    orig_data_bytes = float(4*numpy.prod(binary_seeds.shape))
+    batch_size = int(numpy.sqrt(orig_data_bytes / (2*4)))
+    
+    for batch_start_a in range( 0, num_seeds, batch_size ):
+        batch_stop_a = min(batch_start_a + batch_size, num_seeds)
+        point_batch_a = seed_locations[batch_start_a:batch_stop_a]
+        distances_to_membrane_a = point_distances_to_membrane[batch_start_a:batch_stop_a]
 
+        for batch_start_b in range( 0, num_seeds, batch_size ):
+            batch_stop_b = min(batch_start_b + batch_size, num_seeds)
+            point_batch_b = seed_locations[batch_start_b:batch_stop_b]
+            distances_to_membrane_b = point_distances_to_membrane[batch_start_b:batch_stop_b]
+
+            # Compute the distance of each seed in batch A to each seed in batch B
+            pairwise_distances = pairwise_euclidean_distances(point_batch_a, point_batch_b)
+
+            # Find the seed pairs that are closer to each other than either of them is to a membrane.
+            close_pairs     = (pairwise_distances < distances_to_membrane_a[:, None])
+            close_pairs[:] &= (pairwise_distances < distances_to_membrane_b[None, :])
+            del pairwise_distances
+
+            # Translate seed index within batch to index within entire seed list
+            close_seed_indexes = nonzero_coord_array(close_pairs)
+            close_seed_indexes[:,0] += batch_start_a
+            close_seed_indexes[:,1] += batch_start_b
+            
+            # Update graph edges
+            seed_graph.add_edges_from(close_seed_indexes)
+            del close_seed_indexes
+
+    del seed_locations
+    del point_distances_to_membrane
+    
     # Find the connected components in the graph, and give each CC a unique ID, starting at 1.
     seed_labels = numpy.zeros( (num_seeds,), dtype=numpy.uint32 )
     for group_label, grouped_seed_indexes in enumerate(nx.connected_components(seed_graph), start=1):
@@ -243,45 +267,26 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane, out=None):
     labeled_seed_img[binary_seeds] = seed_labels
     return labeled_seed_img
     
-def pairwise_euclidean_distances( coord_array, MAX_ALLOWED_RAM_USAGE=2e9 ):
+def pairwise_euclidean_distances( coord_array_a, coord_array_b ):
     """
-    For all coordinates in the given array of shape (N, DIM),
-    return a symmetric array of shape (N,N) of the distances
+    For all coordinates in the given arrays of shape (N, DIM) and (M, DIM),
+    return an array of shape (N,M) of the distances
     of each item to all others.
-
-    If the length of coord_array is large enough that this function
-    would need more than MAX_ALLOWED_RAM_USAGE (in bytes), then an
-    exception will be raised instead of attempting to allocate a huge array.
-    
-    Equivalent to:
-    
-    >>> from scipy.spatial.distance import pdist, squareform
-    >>> def pairwise_euclidean_distances(coord_array):
-    ...     distances = squareform( pdist(coord_array) )
-    ...     return distances.astype(numpy.float32)
-    
-    ...but internally operates on 32-bit types, not float64
     """
-    assert numpy.issubdtype(coord_array.dtype, numpy.signedinteger), \
-        "The coordinate array dtype must be signed, and large enough "\
-        "to hold the square of the maximum coordinate."
+    N = len(coord_array_a)
+    M = len(coord_array_b)
+    assert coord_array_a.shape[-1] == coord_array_b.shape[-1]
+    ndim = coord_array_a.shape[-1]
 
-    N = len(coord_array)
-    ndim = coord_array.shape[-1]
-
-    # This function uses two arrays of N*N*(4 bytes): one temporary and one for the result
-    if 2*4*(N**2) > MAX_ALLOWED_RAM_USAGE:
-        raise RuntimeError("Too many points: {}".format(N))
-
-    distances = numpy.zeros((N,N), dtype=numpy.float32)
+    distances = numpy.zeros((N,M), dtype=numpy.float32)
     for i in range(ndim):
-        pairwise_subtracted = numpy.subtract.outer(coord_array[:,i], coord_array[:,i])
+        tmp = numpy.empty_like(distances) # force float32
+        pairwise_subtracted = numpy.subtract.outer(coord_array_a[:,i], coord_array_b[:,i], out=tmp)
         squared = numpy.power(pairwise_subtracted, 2, out=pairwise_subtracted)
         distances[:] += squared
 
     numpy.sqrt(distances, out=distances)
     return distances
-
 
 def nonzero_coord_array(a):
     """
