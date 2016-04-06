@@ -2,6 +2,27 @@ import numpy
 import vigra
 import networkx as nx
 
+import logging
+logger = logging.getLogger(__name__)
+
+import time
+import functools
+def log_calls(log_level):
+    def decorator( func ):
+        @functools.wraps(func)
+        def wrapper( *args, **kwargs ):
+            try:
+                start = time.time()
+                logger.log(log_level, "{}...".format( func.__name__ ))
+                return func(*args, **kwargs)
+            finally:
+                stop = time.time()
+                logger.log(log_level, "{} took ({:0.2f} seconds)".format( func.__name__, stop - start ))
+        wrapper.__wrapped__ = func # Emulate python 3 behavior of @functools.wraps
+        return wrapper
+    return decorator
+
+@log_calls(logging.INFO)
 def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, sigmaWeights, groupSeeds=True, out_debug_image_dict=None, out=None):
     """A probability map 'pmap' is provided and thresholded using pmin.
     This results in a mask. Every connected component which has fewer pixel
@@ -56,6 +77,7 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     iterative_inplace_watershed(distance_to_membrane, labeled_seeds, minSegmentSize, out_debug_image_dict)
     return labeled_seeds
 
+@log_calls(logging.DEBUG)
 def signed_distance_transform(pmap, pmin, minMembraneSize, out_debug_image_dict):
     """
     Performs a threshold on the given image 'pmap' > pmin, and performs
@@ -93,6 +115,7 @@ def signed_distance_transform(pmap, pmin, minMembraneSize, out_debug_image_dict)
     save_debug_image('distance transform', distance_to_membrane, out_debug_image_dict)
     return distance_to_membrane
 
+@log_calls(logging.DEBUG)
 def binary_seeds_from_distance_transform(distance_to_membrane, smoothingSigma, out_debug_image_dict):
     """
     Return a binary image indicating the local maxima of the given distance transform.
@@ -108,9 +131,11 @@ def binary_seeds_from_distance_transform(distance_to_membrane, smoothingSigma, o
 
     localMaximaND(distance_to_membrane, allowPlateaus=True, allowAtBorder=True, marker=numpy.nan, out=distance_to_membrane)
     seedsVolume = numpy.isnan(distance_to_membrane)
+
     save_debug_image('binary seeds', seedsVolume.view(numpy.uint8), out_debug_image_dict)
     return seedsVolume
 
+@log_calls(logging.DEBUG)
 def iterative_inplace_watershed(weights, seedsLabeled, minSegmentSize, out_debug_image_dict):
     """
     Perform a watershed over an image using the given seed image.
@@ -139,6 +164,7 @@ def vigra_bincount(labels):
     counts = vigra.analysis.extractRegionFeatures(image, labels, ['Count'])['Count']
     return counts.astype(numpy.int64)
 
+@log_calls(logging.DEBUG)
 def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_place=False, bin_out=False):
     """
     Given a label image remove (set to zero) labels whose count is too low or too high.
@@ -167,17 +193,11 @@ def remove_wrongly_sized_connected_components(a, min_size, max_size=None, in_pla
         numpy.place(a,a,1)
     return numpy.asarray(a, dtype=original_dtype)
 
+@log_calls(logging.DEBUG)
 def group_seeds_by_distance(binary_seeds, distance_to_membrane, out=None):
     """
     Label seeds in groups, such that every seed in each group is closer to at
     least one other seed in its group than it is to the nearest membrane.
-    
-    Warning: The RAM needed by this function is proportional to N**2,
-             where N is the number of seed points in the image.
-             For example, for 25,000 seed points, this function needs more than 5.5 GB of RAM.
-             For 50,000 seed points, it needs more than 22 GB.
-             
-             Consider breaking your image into blocks and processing them sequentially.
     
     Parameters
     ----------
@@ -198,6 +218,7 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane, out=None):
     seed_locations = nonzero_coord_array(binary_seeds)
     assert seed_locations.shape[1] == binary_seeds.ndim
     num_seeds = seed_locations.shape[0]
+    logger.debug("Number of seed points: {}".format(num_seeds))
 
     # Save RAM: shrink the dtype if possible
     if seed_locations.max() < numpy.sqrt(2**31):
@@ -213,9 +234,8 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane, out=None):
     # We'll find the distances between all points A and B,
     # but do it in batches since it takes a lot of RAM.
     # How big should the batches be?
-    # We'll pick a batch size that
-    # requires about as much RAM as the original input data.
-    # RAM need per batch is 2*4*N*N bytes
+    # We'll pick a batch size that requires about as much RAM as the original input data.
+    # (RAM need per batch is 2*4*N*N bytes)
     orig_data_bytes = float(4*numpy.prod(binary_seeds.shape))
     batch_size = int(numpy.sqrt(orig_data_bytes / (2*4)))
     
@@ -250,11 +270,14 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane, out=None):
     del point_distances_to_membrane
     
     # Find the connected components in the graph, and give each CC a unique ID, starting at 1.
+    logger.debug("Extracting connected seeds...")
+    cc_start_time = time.time()
     seed_labels = numpy.zeros( (num_seeds,), dtype=numpy.uint32 )
     for group_label, grouped_seed_indexes in enumerate(nx.connected_components(seed_graph), start=1):
         for seed_index in grouped_seed_indexes:
             seed_labels[seed_index] = group_label
     del seed_graph
+    logger.debug("... took {:2f} seconds".format( time.time() - cc_start_time ))
 
     # Apply the new labels to the original image
     labeled_seed_img = out
@@ -306,6 +329,7 @@ def nonzero_coord_array(a):
         base_array = base_array.base
     return base_array
 
+@log_calls(logging.DEBUG)
 def localMaximaND(image, *args, **kwargs):
     """
     An ND wrapper for vigra's 2D/3D localMaxima functions.
@@ -317,6 +341,7 @@ def localMaximaND(image, *args, **kwargs):
     if image.ndim == 3:
         return vigra.analysis.localMaxima3D(image, *args, **kwargs)
 
+@log_calls(logging.DEBUG)
 def save_debug_image( name, image, out_debug_image_dict ):
     """
     If output_debug_image_dict isn't None, save the
