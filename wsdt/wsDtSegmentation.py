@@ -99,11 +99,13 @@ def signed_distance_transform(pmap, pmin, minMembraneSize, out_debug_image_dict)
     save_debug_image('filtered membranes', labeled, out_debug_image_dict)
 
     # perform signed dt on mask
+    logger.debug("positive distance transform...")
     distance_to_membrane = vigra.filters.distanceTransform(labeled)
 
     # Save RAM with a sneaky trick:
     # Use distanceTransform in-place, despite the fact that the input and output don't have the same types!
     # (We can just cast labeled as a float32, since uint32 and float32 are the same size.)
+    logger.debug("negative distance transform...")
     distance_to_nonmembrane = labeled.view(numpy.float32)
     vigra.filters.distanceTransform(labeled, background=False, out=distance_to_nonmembrane)
     del labeled # Delete this name, not the array
@@ -144,12 +146,14 @@ def iterative_inplace_watershed(weights, seedsLabeled, minSegmentSize, out_debug
     If minSegmentSize is provided, then watershed segments that were too small will be removed,
     and a second watershed will be performed so that the larger segments can claim the gaps.
     """
-    vigra.analysis.watershedsNew(weights, seeds=seedsLabeled, out=seedsLabeled)[0]
+    _ws, max_label = vigra.analysis.watershedsNew(weights, seeds=seedsLabeled, out=seedsLabeled)
 
     if minSegmentSize:
         save_debug_image('initial watershed', seedsLabeled, out_debug_image_dict)
         remove_wrongly_sized_connected_components(seedsLabeled, minSegmentSize, in_place=True)
-        vigra.analysis.watershedsNew(weights, seeds=seedsLabeled, out=seedsLabeled)[0]
+        _ws, max_label = vigra.analysis.watershedsNew(weights, seeds=seedsLabeled, out=seedsLabeled)
+
+    logger.debug("Max Watershed Label: {}".format(max_label))
 
 def vigra_bincount(labels):
     """
