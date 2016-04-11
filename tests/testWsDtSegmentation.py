@@ -136,10 +136,11 @@ class TestWsDtSegmentation(unittest.TestCase):
         101 +-----------------+-----------------+-----------------+
 
         The x and y markers indicate where seeds will end up.
-        With groupSeeds=False, we would have 4 seed points and 4 final segments.
-        But with groupSeeds=True, the two x points will end up in the same segment,
-        and the two y points will end up in the same segment.
-        The lone z point will not be merged with anything
+        
+        With groupSeeds=False, we get 5 seed points and 5 final segments.
+        But with groupSeeds=True, the two x points end up in the same segment,
+        and the two y points end up in the same segment.
+        The lone z point will not be merged with anything.
         """
         
         input_data = np.zeros((101, 303), dtype=np.float32)
@@ -182,7 +183,7 @@ class TestWsDtSegmentation(unittest.TestCase):
     def test_group_seeds_ram_usage(self):
         """
         The original implementation of the groupSeeds option needed
-        a lot of RAM, scaliing with the number of seeds by N**2.
+        a lot of RAM, scaling with the number of seeds by N**2.
         The new implementation does the work in batches, so it
         doesn't need as much RAM.  
         
@@ -216,7 +217,7 @@ class TestWsDtSegmentation(unittest.TestCase):
         assert ws_output.max() > 1900
 
         # Now check RAM with groupSeeds=True
-        ws_output = assert_mem_usage_factor(3.0)(wsDtSegmentation)(input_data, 0.5, 0, 0, 0.0, 0.0, groupSeeds=True)
+        ws_output = assert_mem_usage_factor(3.0)(wsDtSegmentation)(input_data, 0.5, 0, 0, 2.0, 0.0, groupSeeds=True)
         assert ws_output.max() == 1        
 
     def test_out_param(self):
