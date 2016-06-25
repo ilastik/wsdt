@@ -47,6 +47,8 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     If 'out_debug_image_dict' is not None, it must be a dict, and this function
     will save intermediate results to the dict as vigra.ChunkedArrayCompressed objects.
     
+    Returns: Label image, uint32.  The label values are guaranteed to be consecutive, 1..N.
+    
     Implementation Note: This algorithm has the potential to use a lot of RAM, so this
                          code goes attempts to operate *in-place* on large arrays whenever
                          possible, and we also delete intermediate results soon
@@ -151,7 +153,12 @@ def iterative_inplace_watershed(weights, seedsLabeled, minSegmentSize, out_debug
     if minSegmentSize:
         save_debug_image('initial watershed', seedsLabeled, out_debug_image_dict)
         remove_wrongly_sized_connected_components(seedsLabeled, minSegmentSize, in_place=True)
+
         _ws, max_label = vigra.analysis.watershedsNew(weights, seeds=seedsLabeled, out=seedsLabeled)
+        save_debug_image('second watershed (before relabel)', seedsLabeled, out_debug_image_dict)
+
+        # Remove gaps in the list of label values.
+        _ws, max_label, _labelmap_dict = vigra.analysis.relabelConsecutive(seedsLabeled, start_label=1, out=seedsLabeled)
 
     logger.debug("Max Watershed Label: {}".format(max_label))
 
@@ -218,6 +225,7 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane, out=None):
     -------
         A label image, uint32.
         Grouped seeds will have the same label value.
+        Seed values will be consecutive 1..N
     """
     seed_locations = nonzero_coord_array(binary_seeds)
     assert seed_locations.shape[1] == binary_seeds.ndim
@@ -296,9 +304,10 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane, out=None):
     
 def pairwise_euclidean_distances( coord_array_a, coord_array_b ):
     """
-    For all coordinates in the given arrays of shape (N, DIM) and (M, DIM),
-    return an array of shape (N,M) of the distances
-    of each item to all others.
+    For all coordinates in the given arrays A and B of shape 
+    (N, DIM) and (M, DIM), respectively, return an array of
+    shape (N,M) of the distances of each coordinate in A
+    to all coordinates in B.
     """
     N = len(coord_array_a)
     M = len(coord_array_b)
