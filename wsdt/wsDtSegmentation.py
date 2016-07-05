@@ -354,7 +354,6 @@ def localMaximaND(image, *args, **kwargs):
     if image.ndim == 3:
         return vigra.analysis.localMaxima3D(image, *args, **kwargs)
 
-@log_calls(logging.DEBUG)
 def save_debug_image( name, image, out_debug_image_dict ):
     """
     If output_debug_image_dict isn't None, save the
@@ -368,5 +367,10 @@ def save_debug_image( name, image, out_debug_image_dict ):
     else:
         axistags = None
 
+    # Actual compression is in a helper function so we can log it with @log_calls
+    _save_debug_image(name, image, axistags, out_debug_image_dict)
+
+@log_calls(logging.DEBUG)
+def _save_debug_image(name, image, axistags, out_debug_image_dict):
     out_debug_image_dict[name] = vigra.ChunkedArrayCompressed(image.shape, dtype=image.dtype, axistags=axistags)
     out_debug_image_dict[name][:] = image
