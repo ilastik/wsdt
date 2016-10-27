@@ -23,7 +23,7 @@ def log_calls(log_level):
     return decorator
 
 @log_calls(logging.INFO)
-def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, sigmaWeights, groupSeeds=True, out_debug_image_dict=None, out=None):
+def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, sigmaWeights, groupSeeds=True, preserve_membrane_pmaps=False, out_debug_image_dict=None, out=None):
     """A probability map 'pmap' is provided and thresholded using pmin.
     This results in a mask. Every connected component which has fewer pixel
     than 'minMembraneSize' is deleted from the mask. The mask is used to
@@ -44,6 +44,14 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     same neuron will be merged with a heuristik that ensures that no seeds of
     two different neurons are merged.
     
+    If preserve_membrane_pmaps is True, then the pixels under the membranes
+    (after thresholding) will not be replaced with a negative distance transform.
+    Instead, they will be negated, and the watershed on those pixels will flow
+    according to the inverted probabilities, not the distance to the threshold boundary.
+    In cases of thick membranes whose probability distribution is not symmetric across
+    the membrane, this will place the segment boundaries along the membrane probability
+    maximum, not the geometric center.
+    
     If 'out_debug_image_dict' is not None, it must be a dict, and this function
     will save intermediate results to the dict as vigra.ChunkedArrayCompressed objects.
     
@@ -59,7 +67,7 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
         "Make sure that pmap is numpy array, instead of: " + str(type(pmap))
     assert pmap.ndim in (2,3), "Input must be 2D or 3D.  shape={}".format( pmap.shape )
 
-    distance_to_membrane = signed_distance_transform(pmap, pmin, minMembraneSize, out_debug_image_dict)
+    distance_to_membrane = signed_distance_transform(pmap, pmin, minMembraneSize, preserve_membrane_pmaps, out_debug_image_dict)
     binary_seeds = binary_seeds_from_distance_transform(distance_to_membrane, sigmaMinima, out_debug_image_dict)
 
     if groupSeeds:
@@ -80,7 +88,7 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     return labeled_seeds
 
 @log_calls(logging.DEBUG)
-def signed_distance_transform(pmap, pmin, minMembraneSize, out_debug_image_dict):
+def signed_distance_transform(pmap, pmin, minMembraneSize, preserve_membrane_pmaps, out_debug_image_dict):
     """
     Performs a threshold on the given image 'pmap' > pmin, and performs
     a distance transform to the threshold region border for all pixels outside the
@@ -104,17 +112,25 @@ def signed_distance_transform(pmap, pmin, minMembraneSize, out_debug_image_dict)
     logger.debug("positive distance transform...")
     distance_to_membrane = vigra.filters.distanceTransform(labeled)
 
-    # Save RAM with a sneaky trick:
-    # Use distanceTransform in-place, despite the fact that the input and output don't have the same types!
-    # (We can just cast labeled as a float32, since uint32 and float32 are the same size.)
-    logger.debug("negative distance transform...")
-    distance_to_nonmembrane = labeled.view(numpy.float32)
-    vigra.filters.distanceTransform(labeled, background=False, out=distance_to_nonmembrane)
-    del labeled # Delete this name, not the array
+    if preserve_membrane_pmaps:
+        # Instead of computing a negative distance transform within the thresholded membrane areas,
+        # Use the original probabilities (but inverted)
+        logger.debug("inverting pmap membrane pixels...")
+        membrane_mask = labeled.astype(numpy.bool)
+        del labeled
+        distance_to_membrane[membrane_mask] = -pmap[membrane_mask]
+    else:
+        # Save RAM with a sneaky trick:
+        # Use distanceTransform in-place, despite the fact that the input and output don't have the same types!
+        # (We can just cast labeled as a float32, since uint32 and float32 are the same size.)
+        logger.debug("negative distance transform...")
+        distance_to_nonmembrane = labeled.view(numpy.float32)
+        vigra.filters.distanceTransform(labeled, background=False, out=distance_to_nonmembrane)
+        del labeled # Delete this name, not the array
 
-    # Combine the inner/outer distance transforms
-    distance_to_nonmembrane[distance_to_nonmembrane>0] -= 1
-    distance_to_membrane[:] -= distance_to_nonmembrane
+        # Combine the inner/outer distance transforms
+        distance_to_nonmembrane[distance_to_nonmembrane>0] -= 1
+        distance_to_membrane[:] -= distance_to_nonmembrane
 
     save_debug_image('distance transform', distance_to_membrane, out_debug_image_dict)
     return distance_to_membrane
@@ -133,8 +149,14 @@ def binary_seeds_from_distance_transform(distance_to_membrane, smoothingSigma, o
         distance_to_membrane = vigra.filters.gaussianSmoothing(distance_to_membrane, smoothingSigma, out=distance_to_membrane)
         save_debug_image('smoothed DT for seeds', distance_to_membrane, out_debug_image_dict)
 
+    # If any seeds end up on the membranes, we'll remove them.
+    # This is more likely to happen when the distance transform was generated with preserve_membrane_pmaps=True
+    membrane_mask = (distance_to_membrane < 0)
+
     localMaximaND(distance_to_membrane, allowPlateaus=True, allowAtBorder=True, marker=numpy.nan, out=distance_to_membrane)
     seedsVolume = numpy.isnan(distance_to_membrane)
+    
+    seedsVolume[membrane_mask] = 0
 
     save_debug_image('binary seeds', seedsVolume.view(numpy.uint8), out_debug_image_dict)
     return seedsVolume

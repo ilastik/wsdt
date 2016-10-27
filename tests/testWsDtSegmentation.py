@@ -13,21 +13,42 @@ class TestWsDtSegmentation(unittest.TestCase):
         # Create a volume with 8 sections
         pmap = np.zeros( (101,)*ndim, dtype=np.float32 )
 
-        # Three Z-planes
-        pmap[  :2,  :] = 1
-        pmap[49:51, :] = 1
-        pmap[-2:,   :] = 1
+        # Three Z-planes (or Y in 2d)
+        pmap[  :4,  :] = 1
 
-        # Three Y-planes
-        pmap[:,   :2] = 1
-        pmap[:, 49:51] = 1
-        pmap[:, -2:] = 1
+        # For a threshold of 0.5, these values are all equivalent,
+        # and the watershed boundary will end up in the center under default settings.
+        # But if preserve_membrane_pmaps=True, then the watershed
+        # boundary will end up on slice 53.
+        pmap[47, :] = 0.5
+        pmap[48, :] = 0.5
+        pmap[49, :] = 0.5
+        pmap[50, :] = 0.75
+        pmap[51, :] = 0.75
+        pmap[52, :] = 0.75
+        pmap[53, :] = 1.0
+        
+        pmap[-4:,   :] = 1
+
+        # Three Y-planes (or X in 2d)
+        pmap[:,   :4] = 1
+
+        # See note above about thes values
+        pmap[:, 47] = 0.5
+        pmap[:, 48] = 0.5
+        pmap[:, 49] = 0.5
+        pmap[:, 50] = 0.75
+        pmap[:, 51] = 0.75
+        pmap[:, 52] = 0.75
+        pmap[:, 53] = 1.0
+
+        pmap[:, -4:] = 1
 
         if ndim == 3:
             # Three X-planes
-            pmap[:, :, :2] = 1
-            pmap[:, :, 49:51] = 1
-            pmap[:, :, -2:] = 1
+            pmap[:, :, :4] = 1
+            pmap[:, :, 47:54] = 1
+            pmap[:, :, -4:] = 1
         
         return pmap
         
@@ -78,6 +99,45 @@ class TestWsDtSegmentation(unittest.TestCase):
         for seed_coord in expected_seed_coords:
             assert seeds[tuple(seed_coord)], "No seed at: {}".format( seed_coord )
 
+        #vigra.impex.writeImage(ws_output, '/tmp/simple_2d_ws.tiff')
+        
+
+    def test_preserve_membrane_pmaps(self):
+        pmap = self._gen_input_data(2)
+
+        debug_results = {}
+        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.0, 0.0, groupSeeds=False, preserve_membrane_pmaps=True, out_debug_image_dict=debug_results)
+        seeds = debug_results['seeds'][:]
+        assert seeds.max() == 4
+        assert ws_output.max() == 4
+
+        # Check that pmaps were preserved in the distance transform
+        distance_transform = debug_results['distance transform'][:]
+        assert (distance_transform[pmap >= 0.5] == -pmap[pmap >= 0.5]).all()
+
+        # Ensure consecutive label values
+        label_list = vigra.analysis.unique(ws_output)
+        assert label_list.max() == len(label_list)
+
+        # Expect seeds at (25,25,25), (25,25,75), (25,75,25), etc...
+        expected_seed_coords = list(np.ndindex((2,2)))
+        expected_seed_coords = 50*np.array(expected_seed_coords) + 25
+
+        #print "EXPECTED:\n", expected_seed_coords
+        #print "SEEDS:\n", np.array(np.where(seeds)).transpose()
+
+        for seed_coord in expected_seed_coords:
+            assert seeds[tuple(seed_coord)], "No seed at: {}".format( seed_coord )
+
+        # Due to the way our test data is constructed (it has plateaus),
+        # we don't have guarantees for exactly how wide the final segments will be.
+        # But we know that the upper-left segment should be larger than the lower right,
+        # since the pmap maximum is off-center in that direction
+        upper_left_val = ws_output[25, 25]
+        lower_right_val = ws_output[75, 75]
+        assert (ws_output == upper_left_val).sum() > (ws_output == lower_right_val).sum()
+        
+        #vigra.impex.writeImage(ws_output, '/tmp/preserved_2d.tiff')
 
     def test_min_segment_size(self):
         """
@@ -172,7 +232,7 @@ class TestWsDtSegmentation(unittest.TestCase):
         pmap = self._gen_input_data(3)
 
         # Wrap the segmentation function in this decorator, to verify it's memory usage.
-        ws_output = assert_mem_usage_factor(2.5)(wsDtSegmentation)(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False)
+        ws_output = assert_mem_usage_factor(2.7)(wsDtSegmentation)(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False)
         assert ws_output.max() == 8
 
         # Ensure consecutive label values
@@ -323,7 +383,7 @@ class TestWsDtSegmentation(unittest.TestCase):
         # Ensure consecutive label values
         label_list = vigra.analysis.unique(ws_output)
         assert label_list.max() == len(label_list)
-        
+
     def test_out_param(self):
         pmap = self._gen_input_data(2)
 
