@@ -43,7 +43,7 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     If 'groupSeeds' is True, multiple seed points that are clearly in the
     same neuron will be merged with a heuristik that ensures that no seeds of
     two different neurons are merged.
-    
+
     If preserve_membrane_pmaps is True, then the pixels under the membranes
     (after thresholding) will not be replaced with a negative distance transform.
     Instead, they will be negated, and the watershed on those pixels will flow
@@ -51,12 +51,12 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     In cases of thick membranes whose probability distribution is not symmetric across
     the membrane, this will place the segment boundaries along the membrane probability
     maximum, not the geometric center.
-    
+
     If 'out_debug_image_dict' is not None, it must be a dict, and this function
     will save intermediate results to the dict as vigra.ChunkedArrayCompressed objects.
-    
+
     Returns: Label image, uint32.  The label values are guaranteed to be consecutive, 1..N.
-    
+
     Implementation Note: This algorithm has the potential to use a lot of RAM, so this
                          code goes attempts to operate *in-place* on large arrays whenever
                          possible, and we also delete intermediate results soon
@@ -84,8 +84,8 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
 
     # Invert the DT: Watershed code requires seeds to be at minimums, not maximums
     distance_to_membrane[:] *= -1
-    iterative_inplace_watershed(distance_to_membrane, labeled_seeds, minSegmentSize, out_debug_image_dict)
-    return labeled_seeds
+    max_label = iterative_inplace_watershed(distance_to_membrane, labeled_seeds, minSegmentSize, out_debug_image_dict)
+    return labeled_seeds, max_label
 
 @log_calls(logging.DEBUG)
 def signed_distance_transform(pmap, pmin, minMembraneSize, preserve_membrane_pmaps, out_debug_image_dict):
@@ -94,7 +94,7 @@ def signed_distance_transform(pmap, pmin, minMembraneSize, preserve_membrane_pma
     a distance transform to the threshold region border for all pixels outside the
     threshold boundaries (positive distances) and also all pixels *inside*
     the boundary (negative distances).
-    
+
     The result is a signed float32 image.
     """
     # get the thresholded pmap
@@ -139,7 +139,7 @@ def signed_distance_transform(pmap, pmin, minMembraneSize, preserve_membrane_pma
 def binary_seeds_from_distance_transform(distance_to_membrane, smoothingSigma, out_debug_image_dict):
     """
     Return a binary image indicating the local maxima of the given distance transform.
-    
+
     If smoothingSigma is provided, pre-smooth the distance transform before locating local maxima.
     """
     # Can't work in-place: Not allowed to modify input
@@ -155,7 +155,7 @@ def binary_seeds_from_distance_transform(distance_to_membrane, smoothingSigma, o
 
     localMaximaND(distance_to_membrane, allowPlateaus=True, allowAtBorder=True, marker=numpy.nan, out=distance_to_membrane)
     seedsVolume = numpy.isnan(distance_to_membrane)
-    
+
     seedsVolume[membrane_mask] = 0
 
     save_debug_image('binary seeds', seedsVolume.view(numpy.uint8), out_debug_image_dict)
@@ -166,7 +166,7 @@ def iterative_inplace_watershed(weights, seedsLabeled, minSegmentSize, out_debug
     """
     Perform a watershed over an image using the given seed image.
     The watershed is written IN-PLACE into the seed image.
-    
+
     If minSegmentSize is provided, then watershed segments that were too small will be removed,
     and a second watershed will be performed so that the larger segments can claim the gaps.
     """
@@ -183,6 +183,7 @@ def iterative_inplace_watershed(weights, seedsLabeled, minSegmentSize, out_debug
         _ws, max_label, _labelmap_dict = vigra.analysis.relabelConsecutive(seedsLabeled, start_label=1, out=seedsLabeled)
 
     logger.debug("Max Watershed Label: {}".format(max_label))
+    return max_label
 
 def vigra_bincount(labels):
     """
@@ -231,15 +232,15 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane, out=None):
     """
     Label seeds in groups, such that every seed in each group is closer to at
     least one other seed in its group than it is to the nearest membrane.
-    
+
     Parameters
     ----------
     binary_seeds
         A boolean image indicating where the seeds are
-    
+
     distance_to_membrane
         A float32 image of distances to the membranes
-    
+
     out
         Optional.  Must be uint32, same shape as binary_seeds.
 
@@ -264,7 +265,7 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane, out=None):
     # Create a graph of the seed points containing only the connections between 'close' seeds, as found below.
     # (Note that self->self edges are included in this graph, since that distance is 0.0)
     seed_graph = nx.Graph()
-    
+
     # We'll find the distances between all points A and B,
     # but do it in batches since it takes a lot of RAM.
     # How big should the batches be?
@@ -272,7 +273,7 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane, out=None):
     # (RAM need per batch is 2*4*N*N bytes)
     orig_data_bytes = float(4*numpy.prod(binary_seeds.shape))
     batch_size = int(numpy.sqrt(orig_data_bytes / (2*4)))
-    
+
     for batch_start_a in range( 0, num_seeds, batch_size ):
         batch_stop_a = min(batch_start_a + batch_size, num_seeds)
         point_batch_a = seed_locations[batch_start_a:batch_stop_a]
@@ -295,14 +296,14 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane, out=None):
             close_seed_indexes = nonzero_coord_array(close_pairs)
             close_seed_indexes[:,0] += batch_start_a
             close_seed_indexes[:,1] += batch_start_b
-            
+
             # Update graph edges
             seed_graph.add_edges_from(close_seed_indexes)
             del close_seed_indexes
 
     del seed_locations
     del point_distances_to_membrane
-    
+
     # Find the connected components in the graph, and give each CC a unique ID, starting at 1.
     logger.debug("Extracting connected seeds...")
     cc_start_time = time.time()
@@ -323,10 +324,10 @@ def group_seeds_by_distance(binary_seeds, distance_to_membrane, out=None):
         assert labeled_seed_img.dtype == numpy.uint32
     labeled_seed_img[binary_seeds] = seed_labels
     return labeled_seed_img
-    
+
 def pairwise_euclidean_distances( coord_array_a, coord_array_b ):
     """
-    For all coordinates in the given arrays A and B of shape 
+    For all coordinates in the given arrays A and B of shape
     (N, DIM) and (M, DIM), respectively, return an array of
     shape (N,M) of the distances of each coordinate in A
     to all coordinates in B.
@@ -349,7 +350,7 @@ def pairwise_euclidean_distances( coord_array_a, coord_array_b ):
 def nonzero_coord_array(a):
     """
     (Copied from lazyflow.utility.helpers)
-    
+
     Equivalent to np.transpose(a.nonzero()), but much
     faster for large arrays, thanks to a little trick:
     The elements of the tuple returned by a.nonzero() share a common base,
@@ -357,7 +358,7 @@ def nonzero_coord_array(a):
     calling transpose() on the tuple.
     """
     base_array = a.nonzero()[0].base
-    
+
     # This is necessary because VigraArrays have their own version
     # of nonzero(), which adds an extra base in the view chain.
     while base_array.base is not None:
@@ -383,7 +384,7 @@ def save_debug_image( name, image, out_debug_image_dict ):
     """
     if out_debug_image_dict is None:
         return
-    
+
     if hasattr(image, 'axistags'):
         axistags=image.axistags
     else:
