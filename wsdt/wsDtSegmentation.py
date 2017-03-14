@@ -60,6 +60,13 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     distance_to_membrane = signed_distance_transform(pmap, pmin, minMembraneSize, out_debug_image_dict)
     binary_seeds = binary_seeds_from_distance_transform(distance_to_membrane, sigmaMinima, out_debug_image_dict)
 
+    # seedsd from local minima
+    #smoothed_for_local_minima = vigra.filters.gaussianSmoothing(pmap, 2.7)
+    #localMinima = vigra.analysis.localMinima(smoothed_for_local_minima, alllowAtBorder = True, allowPlateaus = True, marker = numpy.nan)
+    #seedsFromMinima = nimpy.isnan(localMinima)
+
+    #binary_seeds += seedsFromMinima
+
     if groupSeeds:
         labeled_seeds = group_seeds_by_distance( binary_seeds, distance_to_membrane, out=out )
     else:
@@ -73,9 +80,36 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
         save_debug_image('smoothed DT for watershed', distance_to_membrane, out_debug_image_dict)
 
     if growPmap:
-        iterative_inplace_watershed(pmap.astype('float32'), labeled_seeds, minSegmentSize, out_debug_image_dict)
+        hmap = vigra.filters.gaussianSmoothing(pmap.astype('float32'),sigmaWeights)
+        hmap += .1 * vigra.filters.gaussianSmoothing(pmap.astype('float32'),5*sigmaWeights)
+
+        iterative_inplace_watershed(hmap, labeled_seeds, minSegmentSize, out_debug_image_dict)
     else:
-        # Invert the DT: Watershed code requires seeds to be at minimums, not maximums
+        #thresholded_pmap = numpy.zeros_like(pmap, dtype = 'uint32')
+        #thresholded_pmap[pmap < 0.5] = 1
+        #print thresholded_pmap.shape
+        #thresholded_ccs =vigra.analysis.labelMultiArrayWithBackground(thresholded_pmap.squeeze())
+        #rag = vigra.graphs.regionAdjacencyGraph(vigra.graphs.gridGraph(pmap.shape), thresholded_ccs)
+        #nodeFeatures = rag.accumulateNodeFeatures(pmap.astype('float32'))
+        #nodeSeeds = numpy.zeros_like(nodeFeatures)
+        #seedsMax = labeled_seeds.max() + 1
+        #print "Num old seeds"
+        #print seedsMax
+        #for n in xrange(rag.nodeNum):
+        #    if nodeFeatures[n] > 0.3 and nodeFeatures[n] < 0.7:
+        #        nodeSeeds[n] = seedsMax
+        #        seedsMax += 1
+        #seedsNew = rag.projectLabelsToBaseGraph(nodeSeeds)
+
+        #seeds = labeled_seeds + seedsNew
+        #seeds = vigra.analysis.labelMultiArrayWithBackground(seeds.astype('uint32'))
+        ##from volumina_viewer import volumina_n_layer
+        ##volumina_n_layer([pmap,thresholded_pmap,thresholded_ccs,seedsNew,seeds])
+        ##quit()
+
+        #print "Num new seeds"
+        #print seeds.max()
+        ## Invert the DT: Watershed code requires seeds to be at minimums, not maximums
         distance_to_membrane[:] *= -1
         iterative_inplace_watershed(distance_to_membrane, labeled_seeds, minSegmentSize, out_debug_image_dict)
     return labeled_seeds
@@ -107,7 +141,9 @@ def wsDtSegmentationSpecial(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMi
             vigra.filters.gaussianSmoothing(dist_z, sigmaWeights, out=dist_z)
 
         # Invert the DT: Watershed code requires seeds to be at minimums, not maximums
-        iterative_inplace_watershed(pmap[:,:,z].astype('float32'), labeled_seeds[:,:,z], minSegmentSize, out_debug_image_dict)
+        hmap = vigra.filters.gaussianSmoothing(pmap[:,:,z].astype('float32'),sigmaWeights)
+        hmap += .1 * vigra.filters.gaussianSmoothing(pmap[:,:,z].astype('float32'),5*sigmaWeights)
+        iterative_inplace_watershed(hmap, labeled_seeds[:,:,z], minSegmentSize, out_debug_image_dict)
         labeled_seeds[:,:,z] += offset
         offset = labeled_seeds.max()
 
