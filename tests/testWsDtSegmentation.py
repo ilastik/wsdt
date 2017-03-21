@@ -57,14 +57,14 @@ class TestWsDtSegmentation(unittest.TestCase):
         pmap = self._gen_input_data(3)
 
         debug_results = {}
-        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False, out_debug_image_dict=debug_results)
+        ws_output, max_label = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False, out_debug_image_dict=debug_results)
         seeds = debug_results['seeds'][:]
         assert seeds.max() == 8
         assert ws_output.max() == 8
 
         # Ensure consecutive label values
         label_list = vigra.analysis.unique(ws_output)
-        assert label_list.max() == len(label_list)
+        assert label_list.max() == len(label_list) == max_label
 
         # Expect seeds at (25,25,25), (25,25,75), (25,75,25), etc...
         expected_seed_coords = list(np.ndindex((2,2,2)))
@@ -80,14 +80,14 @@ class TestWsDtSegmentation(unittest.TestCase):
         pmap = self._gen_input_data(2)
 
         debug_results = {}
-        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False, out_debug_image_dict=debug_results)
+        ws_output, max_label = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False, out_debug_image_dict=debug_results)
         seeds = debug_results['seeds'][:]
         assert seeds.max() == 4
         assert ws_output.max() == 4
 
         # Ensure consecutive label values
         label_list = vigra.analysis.unique(ws_output)
-        assert label_list.max() == len(label_list)
+        assert label_list.max() == len(label_list) == max_label
 
         # Expect seeds at (25,25,25), (25,25,75), (25,75,25), etc...
         expected_seed_coords = list(np.ndindex((2,2)))
@@ -106,7 +106,7 @@ class TestWsDtSegmentation(unittest.TestCase):
         pmap = self._gen_input_data(2)
 
         debug_results = {}
-        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.0, 0.0, groupSeeds=False, preserve_membrane_pmaps=True, out_debug_image_dict=debug_results)
+        ws_output, max_label = wsDtSegmentation(pmap, 0.5, 0, 10, 0.0, 0.0, groupSeeds=False, preserve_membrane_pmaps=True, out_debug_image_dict=debug_results)
         seeds = debug_results['seeds'][:]
         assert seeds.max() == 4
         assert ws_output.max() == 4
@@ -117,7 +117,7 @@ class TestWsDtSegmentation(unittest.TestCase):
 
         # Ensure consecutive label values
         label_list = vigra.analysis.unique(ws_output)
-        assert label_list.max() == len(label_list)
+        assert label_list.max() == len(label_list) == max_label
 
         # Expect seeds at (25,25,25), (25,25,75), (25,75,25), etc...
         expected_seed_coords = list(np.ndindex((2,2)))
@@ -186,12 +186,12 @@ class TestWsDtSegmentation(unittest.TestCase):
         # First, no min segment size
         debug_results = {}
         min_segment_size = 0
-        ws_output = wsDtSegmentation(input_data, 0.5, 0, min_segment_size, 0.0, 0.0, groupSeeds=False, out_debug_image_dict=debug_results)
+        ws_output, max_label = wsDtSegmentation(input_data, 0.5, 0, min_segment_size, 0.0, 0.0, groupSeeds=False, out_debug_image_dict=debug_results)
         assert ws_output.max() == 4
 
         # Ensure consecutive label values
         label_list = vigra.analysis.unique(ws_output)
-        assert label_list.max() == len(label_list)
+        assert label_list.max() == len(label_list) == max_label
         
         #from wsdt.wsDtSegmentation import vigra_bincount
         #print vigra_bincount( ws_output )
@@ -199,13 +199,13 @@ class TestWsDtSegmentation(unittest.TestCase):
         # Now with a min segment size
         debug_results = {}
         min_segment_size = 90*90
-        ws_output = wsDtSegmentation(input_data, 0.5, 0, min_segment_size, 0.0, 0.0, groupSeeds=False, out_debug_image_dict=debug_results)
+        ws_output, max_label = wsDtSegmentation(input_data, 0.5, 0, min_segment_size, 0.0, 0.0, groupSeeds=False, out_debug_image_dict=debug_results)
         assert ws_output.max() == 2
         #print vigra_bincount( ws_output )
         
         # Ensure consecutive label values
         label_list = vigra.analysis.unique(ws_output)
-        assert label_list.max() == len(label_list)
+        assert label_list.max() == len(label_list) == max_label
 
     def test_border_seeds(self):
         """
@@ -219,31 +219,31 @@ class TestWsDtSegmentation(unittest.TestCase):
         pmap[1:50, 13:38, 13:38] = 0
 
         debug_results = {}
-        _ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False, out_debug_image_dict=debug_results)
+        _ws_output, max_label = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False, out_debug_image_dict=debug_results)
         seeds = debug_results['seeds'][:]
         assert seeds.sum() == 1
         assert seeds[0, 25, 25] == 1
 
         # Ensure consecutive label values
         label_list = vigra.analysis.unique(_ws_output)
-        assert label_list.max() == len(label_list)
+        assert label_list.max() == len(label_list) == max_label
 
     def test_memory_usage(self):
         pmap = self._gen_input_data(3)
 
         # Wrap the segmentation function in this decorator, to verify it's memory usage.
-        ws_output = assert_mem_usage_factor(2.7)(wsDtSegmentation)(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False)
+        ws_output, max_label = assert_mem_usage_factor(2.7)(wsDtSegmentation)(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False)
         assert ws_output.max() == 8
 
         # Ensure consecutive label values
         label_list = vigra.analysis.unique(ws_output)
-        assert label_list.max() == len(label_list)
+        assert label_list.max() == len(label_list) == max_label
 
         # Now try again, with groupSeeds=True
         # Note: This is a best-case scenario for memory usage, since the memory 
         #       usage of the seed-grouping function depends on the NUMBER of seeds,
         #       and we have very few seeds in this test.
-        ws_output = assert_mem_usage_factor(3.5)(wsDtSegmentation)(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=True)
+        ws_output, max_label = assert_mem_usage_factor(3.5)(wsDtSegmentation)(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=True)
         assert ws_output.max() == 8
 
     def test_debug_output(self):
@@ -253,12 +253,12 @@ class TestWsDtSegmentation(unittest.TestCase):
         """
         pmap = self._gen_input_data(3)
         debug_images = {}
-        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False, out_debug_image_dict=debug_images)
+        ws_output, max_label = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False, out_debug_image_dict=debug_images)
         assert ws_output.max() == 8
 
         # Ensure consecutive label values
         label_list = vigra.analysis.unique(ws_output)
-        assert label_list.max() == len(label_list)
+        assert label_list.max() == len(label_list) == max_label
         
         assert 'thresholded membranes' in debug_images
         assert debug_images['thresholded membranes'].shape == ws_output.shape
@@ -312,22 +312,22 @@ class TestWsDtSegmentation(unittest.TestCase):
         
         # First, try without groupSeeds
         debug_results = {}
-        ws_output = wsDtSegmentation(input_data, 0.5, 0, 0, 0.0, 0.0, groupSeeds=False, out_debug_image_dict=debug_results)
+        ws_output, max_label = wsDtSegmentation(input_data, 0.5, 0, 0, 0.0, 0.0, groupSeeds=False, out_debug_image_dict=debug_results)
         assert ws_output.max() == 5
 
         # Ensure consecutive label values
         label_list = vigra.analysis.unique(ws_output)
-        assert label_list.max() == len(label_list)
+        assert label_list.max() == len(label_list) == max_label
         
         # Now, with groupSeeds=True, the left-hand seeds should 
         # be merged and the right-hand seeds should be merged
         debug_results = {}
-        ws_output = wsDtSegmentation(input_data, 0.5, 0, 0, 0.0, 0.0, groupSeeds=True, out_debug_image_dict=debug_results)
+        ws_output, max_label = wsDtSegmentation(input_data, 0.5, 0, 0, 0.0, 0.0, groupSeeds=True, out_debug_image_dict=debug_results)
         assert ws_output.max() == 3
 
         # Ensure consecutive label values
         label_list = vigra.analysis.unique(ws_output)
-        assert label_list.max() == len(label_list)
+        assert label_list.max() == len(label_list) == max_label
         
         assert (ws_output[:,   0: 90] == ws_output[51,  51]).all()
         assert (ws_output[:, 110:190] == ws_output[51, 151]).all()
@@ -369,27 +369,27 @@ class TestWsDtSegmentation(unittest.TestCase):
         input_data[:10, ::10] = 1
         
         # Sanity check, try without groupSeeds, make sure we've got a lot of segments
-        ws_output = wsDtSegmentation(input_data, 0.5, 0, 0, 2.0, 0.0, groupSeeds=False)
+        ws_output, max_label = wsDtSegmentation(input_data, 0.5, 0, 0, 2.0, 0.0, groupSeeds=False)
         assert ws_output.max() > 1900
 
         # Ensure consecutive label values
         label_list = vigra.analysis.unique(ws_output)
-        assert label_list.max() == len(label_list)
+        assert label_list.max() == len(label_list) == max_label
         
         # Now check RAM with groupSeeds=True
-        ws_output = assert_mem_usage_factor(3.0)(wsDtSegmentation)(input_data, 0.5, 0, 0, 2.0, 0.0, groupSeeds=True)
-        assert ws_output.max() == 1        
+        ws_output, max_label = assert_mem_usage_factor(3.0)(wsDtSegmentation)(input_data, 0.5, 0, 0, 2.0, 0.0, groupSeeds=True)
+        assert ws_output.max() == 1
 
         # Ensure consecutive label values
         label_list = vigra.analysis.unique(ws_output)
-        assert label_list.max() == len(label_list)
+        assert label_list.max() == len(label_list) == max_label
 
     def test_out_param(self):
         pmap = self._gen_input_data(2)
 
         debug_results = {}
         preallocated = np.random.randint( 0, 100, pmap.shape ).astype(np.uint32)
-        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False, out_debug_image_dict=debug_results, out=preallocated)
+        ws_output, max_label = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=False, out_debug_image_dict=debug_results, out=preallocated)
         assert ws_output is preallocated
         seeds = debug_results['seeds'][:]
         assert seeds.max() == 4
@@ -397,18 +397,18 @@ class TestWsDtSegmentation(unittest.TestCase):
 
         # Ensure consecutive label values
         label_list = vigra.analysis.unique(ws_output)
-        assert label_list.max() == len(label_list)
+        assert label_list.max() == len(label_list) == max_label
         
         # Also with groupSeeds=True
         preallocated = np.random.randint( 0, 100, pmap.shape ).astype(np.uint32)
-        ws_output = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=True, out_debug_image_dict=debug_results, out=preallocated)
+        ws_output, max_label = wsDtSegmentation(pmap, 0.5, 0, 10, 0.1, 0.1, groupSeeds=True, out_debug_image_dict=debug_results, out=preallocated)
         assert ws_output is preallocated
         assert seeds.max() == 4
         assert ws_output.max() == 4
 
         # Ensure consecutive label values
         label_list = vigra.analysis.unique(ws_output)
-        assert label_list.max() == len(label_list)
+        assert label_list.max() == len(label_list) == max_label
 
 if __name__ == "__main__":
     import sys
