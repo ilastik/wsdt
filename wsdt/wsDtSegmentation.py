@@ -23,7 +23,19 @@ def log_calls(log_level):
     return decorator
 
 @log_calls(logging.INFO)
-def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, sigmaWeights, groupSeeds=True, preserve_membrane_pmaps=False, out_debug_image_dict=None, out=None):
+def wsDtSegmentation(
+        pmap,
+        pmin,
+        minMembraneSize,
+        minSegmentSize,
+        sigmaMinima,
+        sigmaWeights,
+        groupSeeds=True,
+        preserve_membrane_pmaps=False,
+        grow_on_pmap = False,
+        out_debug_image_dict=None,
+        out=None
+        ):
     """A probability map 'pmap' is provided and thresholded using pmin.
     This results in a mask. Every connected component which has fewer pixel
     than 'minMembraneSize' is deleted from the mask. The mask is used to
@@ -52,6 +64,9 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     the membrane, this will place the segment boundaries along the membrane probability
     maximum, not the geometric center.
 
+    If grow_on_pmap is True, the watershed uses the (smoothed) probability map as heightmap.
+    Otherwise the distance transform is used.
+
     If 'out_debug_image_dict' is not None, it must be a dict, and this function
     will save intermediate results to the dict as vigra.ChunkedArrayCompressed objects.
 
@@ -78,13 +93,19 @@ def wsDtSegmentation(pmap, pmin, minMembraneSize, minSegmentSize, sigmaMinima, s
     del binary_seeds
     save_debug_image('seeds', labeled_seeds, out_debug_image_dict)
 
-    if sigmaWeights != 0.0:
-        vigra.filters.gaussianSmoothing(distance_to_membrane, sigmaWeights, out=distance_to_membrane)
-        save_debug_image('smoothed DT for watershed', distance_to_membrane, out_debug_image_dict)
+    if grow_on_pmap:
+        hmap = pmap
+    else:
+        hmap = distance_to_membrane
 
-    # Invert the DT: Watershed code requires seeds to be at minimums, not maximums
-    distance_to_membrane[:] *= -1
-    max_label = iterative_inplace_watershed(distance_to_membrane, labeled_seeds, minSegmentSize, out_debug_image_dict)
+    if sigmaWeights != 0.0:
+        vigra.filters.gaussianSmoothing(hmap, sigmaWeights, out=hmap)
+        save_debug_image('smoothed height map for watershed', hmap, out_debug_image_dict)
+
+    if not grow_on_pmap:
+        # Invert the DT: Watershed code requires seeds to be at minimums, not maximums
+        hmap[:] *= -1
+    max_label = iterative_inplace_watershed(hmap, labeled_seeds, minSegmentSize, out_debug_image_dict)
     return labeled_seeds, max_label
 
 @log_calls(logging.DEBUG)
