@@ -18,7 +18,6 @@ build:
 
 requirements:
   build:
-    - python 2.7*|3.5*
     - python {{PY_VER}}*
     - setuptools
 
