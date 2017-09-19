@@ -9,5 +9,7 @@ setup(name='wsdt',
       author_email='timo.prange@iwr.uni-heidelberg.de',
       url='github.com/ilastik/wsdt',
       packages=['wsdt'],
+      zip_safe=False,
+      include_package_data=False
       #install_requires=['vigra']
      )

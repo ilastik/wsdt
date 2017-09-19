@@ -9,8 +9,7 @@ package:
   {% endif %}
   
 source:
-  git_url: ../
-  git_tag: HEAD
+  path: ../
 
 build:
   number: 0
@@ -19,11 +18,12 @@ build:
 requirements:
   build:
     - python {{PY_VER}}*
+    - numpy {{NPY_VER}}*
     - setuptools
 
   run:
     - python {{PY_VER}}*
-    - numpy
+    - numpy {{NPY_VER}}*
     - vigra >=1.11
     - networkx
 
