@@ -3,7 +3,7 @@
 from setuptools import setup
 
 setup(name='wsdt',
-      version='0.1',
+      version='0.2',
       description='Implementation of a distance-transform-based watershed algorithm',
       author='Timo Prange',
       author_email='timo.prange@iwr.uni-heidelberg.de',
