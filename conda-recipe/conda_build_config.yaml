@@ -1,7 +1,0 @@
-numpy:
-  - 1.12
-vigra:
-  - 1.12
-
-pin_run_as_build:
-  numpy: x.x
