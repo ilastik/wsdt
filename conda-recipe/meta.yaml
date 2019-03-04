@@ -12,6 +12,7 @@ source:
   path: ../
 
 build:
+  number: 1000
   noarch: python
   string: np{{CONDA_NPY}}_py_{{PKG_BUILDNUM}}_h{{PKG_HASH}}_g{{GIT_FULL_HASH[:7]}}
   skip: true  # [py2k]
