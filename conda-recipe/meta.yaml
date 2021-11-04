@@ -12,20 +12,19 @@ source:
   path: ../
 
 build:
-  number: 1000
+  number: 0
   noarch: python
-  string: np{{CONDA_NPY}}_py_{{PKG_BUILDNUM}}_h{{PKG_HASH}}_g{{GIT_FULL_HASH[:7]}}
-  skip: true  # [py2k]
+  string: py_{{PKG_BUILDNUM}}_g{{GIT_FULL_HASH[:7]}}
   script: python -m pip install --no-deps --ignore-installed .
 
 requirements:
   build:
-    - python >=2.7
+    - python >=3.7
     - pip
   run:
-    - python
+    - python >=3.7
     - numpy >=1.12
-    - vigra {{ vigra }}
+    - vigra >=1.11
     - networkx
 
 test:
@@ -33,6 +32,8 @@ test:
     - tests
   
   requires:
+    # numpy allocation tracking not rebuilt for newer versions
+    - python 3.7
     - nose
     - numpy-allocation-tracking # This package can be found in the ilastik channel
 
