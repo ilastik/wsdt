@@ -1,10 +1,24 @@
 # wsdt
 
 Repo for the watershed on distance transform.
-To use the functionality, just add */path/to/wsdt/wsdt* to yout pythonpath.
 
-For usage, see the two notebooks in */examples*.
 
-## Install with conda
+## Installation for development:
 
-$ conda install -c ilastik -n wsdt_env wsdt
+We recommend development using `conda`/`mamba`:
+
+```bash
+> mamba create -n wsdt-dev -c conda-forge python numpy networkx nose jupyter notebook pip
+> mamba activate wsdt-dev
+> pip install -e .
+```
+
+## Usage
+
+For usage, see the two notebooks in the `examples` folder.
+
+## Install with conda (into an existing environment):
+
+```
+$ conda install -c ilastik-forge wsdt
+```
