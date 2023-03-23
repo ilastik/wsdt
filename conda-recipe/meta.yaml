@@ -1,12 +1,9 @@
+
+{% set setup_py_data = load_setup_py_data(setup_file='../setup.py', from_recipe_dir=True) %}
 package:
     name: wsdt
 
-  {% if GIT_DESCRIBE_NUMBER|int == 0 %}
-    version: {{GIT_DESCRIBE_TAG}}
-  {% else %}
-    # If we're using a non-tagged revision, append '.postN' to the version
-    version: {{GIT_DESCRIBE_TAG}}.post{{GIT_DESCRIBE_NUMBER}}
-  {% endif %}
+    version: {{ setup_py_data.version }}
   
 source:
   path: ../
@@ -14,13 +11,14 @@ source:
 build:
   number: 0
   noarch: python
-  string: py_{{PKG_BUILDNUM}}_g{{GIT_FULL_HASH[:7]}}
-  script: python -m pip install --no-deps --ignore-installed .
+  script: {{ PYTHON }} -m pip install --no-deps --ignore-installed .
 
 requirements:
-  build:
+  host:
     - python >=3.7
     - pip
+    - setuptools >=40.0
+    - setuptools_scm
   run:
     - python >=3.7
     - numpy >=1.12
