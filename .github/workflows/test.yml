@@ -21,17 +21,20 @@ jobs:
           auto-update-conda: true
           auto-activate-base: true
           activate-environment: ""
+          channel-priority: strict
+          miniforge-variant: Mambaforge
+          use-mamba: true
       - name: install common dependencies
-        run: conda install -n base -c conda-forge conda-build mamba boa -y
+        run: mamba install -n base -c conda-forge boa setuptools_scm -y
       - name: linux conda build test
         if: matrix.os == 'ubuntu-latest'
         shell: bash -l {0}
-        run: conda mambabuild -c conda-forge conda-recipe
+        run: conda mambabuild -c conda-forge -c ilastik-forge conda-recipe
       - name: osx test
         if: matrix.os == 'macos-latest'
         shell: bash -l {0}
-        run:  conda mambabuild -c conda-forge conda-recipe
+        run:  conda mambabuild -c conda-forge -c ilastik-forge conda-recipe
       - name: windows conda-build
         if: matrix.os == 'windows-latest'
         shell: cmd /C CALL {0}
-        run: conda mambabuild -c conda-forge conda-recipe
+        run: conda mambabuild -c conda-forge -c ilastik-forge conda-recipe
